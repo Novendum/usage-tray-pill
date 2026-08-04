@@ -20,7 +20,7 @@ https://github.com/user-attachments/assets/1f7a0588-d80b-4f79-ab9f-c70e5b1f08a8
 
 ## Current status
 
-UTP is an open-source release candidate under active development. The reviewed source is prepared for public publication, while provider compatibility remains best-effort because provider-owned interfaces can change.
+UTP is a public open-source release candidate under active development. The published source has been reviewed for release, while provider compatibility remains best-effort because provider-owned interfaces can change.
 
 See [Open-Source Readiness](docs/OPEN_SOURCE_READINESS.md) for the current evidence and remaining manual compatibility checks.
 Maintainers can use [Repository Settings](docs/REPOSITORY_SETTINGS.md) for the public GitHub configuration.
