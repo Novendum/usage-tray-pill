@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a reproducible Usage Tray Pill problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never include cookies, tokens, credential files, provider responses, account identifiers, or `%APPDATA%\UsageTrayPill`.
+  - type: input
+    id: version
+    attributes:
+      label: UTP version or commit
+      placeholder: v0.1.0 or full commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options:
+        - ChatGPT/Codex
+        - Claude
+        - Antigravity
+        - OpenCode Go
+        - Qwen Token Plan
+        - Tray, pill, startup, or fullscreen behavior
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest repeatable sequence.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Checks performed
+      description: Include sanitized test output and provider app versions. Do not attach real usage screenshots unless every personal value is removed.

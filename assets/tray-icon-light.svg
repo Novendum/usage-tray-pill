@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Usage Tray Pill light icon</title>
+  <desc id="desc">The UTP logo on a light rounded-square background.</desc>
+  <rect x="2" y="2" width="252" height="252" rx="54" fill="#E8F3F6"/>
+  <path d="M48 56v66c0 55 34 96 80 96s80-41 80-96V56"
+        fill="none" stroke="#22B8C9" stroke-width="34" stroke-linecap="round"/>
+  <path d="M102 72v54M132 90v36M162 106v20"
+        fill="none" stroke="#F2A33A" stroke-width="16" stroke-linecap="round"/>
+</svg>

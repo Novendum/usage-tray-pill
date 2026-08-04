@@ -1,0 +1,37 @@
+# UTP runtime data
+data.json
+claude-usage.json
+antigravity-usage.json
+opencode-go-usage.json
+opencode-go-credentials.json
+qwen-token-plan-usage.json
+qwen-token-plan-credentials.json
+*.broken-*
+*.tmp-*
+*.log
+*.lnk
+
+# Secrets and local configuration
+.env
+.env.*
+*.local.*
+*.credentials.json
+
+# Local high-resolution artwork sources are not part of the release package.
+assets/*-source.png
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# PowerShell generated artifacts
+*.ps1xml
+*.pssc
+*.psd1.tmp
+
+# Test and coverage output
+TestResults/
+coverage/

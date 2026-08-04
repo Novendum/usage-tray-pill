@@ -1,0 +1,34 @@
+# Release Checklist
+
+- [x] Full `Test-UsageTrayPill.ps1` suite passes on Windows PowerShell 5.1.
+- [x] Manual launch works from an arbitrary path such as `C:\Tools\usage-tray-pill`.
+- [x] Startup and desktop shortcut install/uninstall paths work.
+- [x] No visible PowerShell or CMD window remains after hidden launch.
+- [x] ChatGPT/Codex weekly usage refreshes or fails without clearing valid cached data.
+- [x] Claude statusline refreshes 5-hour and weekly usage after a real Claude response.
+- [x] Claude usage works without reading provider credentials or calling an experimental usage endpoint.
+- [x] OpenCode Go remains absent from the click cycle until explicitly configured.
+- [x] OpenCode Go 5-hour, weekly, and monthly usage refreshes from a real workspace dashboard.
+- [ ] OpenCode Go setup, expired-session, rate-limit, stale-cache, disable, and DPAPI current-user behavior are manually verified.
+- [x] OpenCode Go does not read OpenCode-owned auth files, API keys, or browser cookie databases.
+- [x] Qwen remains absent from the click cycle until explicitly configured.
+- [x] Qwen 5-hour and weekly usage refreshes from a real Token Plan dashboard session.
+- [ ] Qwen setup, expired-session, rate-limit, stale-cache, disable, and DPAPI current-user behavior are manually verified.
+- [x] Qwen does not read Qwen-owned settings, API keys, or browser cookie databases.
+- [x] Antigravity quota groups refresh from a real running Antigravity session.
+- [x] All five provider pill layouts are visually confirmed on the user's current Windows display setup, including logo alignment and dynamic widths.
+- [x] Provider failures and rate limits do not create process storms.
+- [x] The pill hides for fullscreen video and games and returns afterward.
+- [x] Exiting the tray stops only UTP-owned helpers.
+- [x] Repository and complete Git history pass the Gitleaks GitHub Actions job.
+- [x] GitHub Actions dependencies remain pinned to reviewed commit SHAs.
+- [x] Runtime data, logs, user paths, and account details are absent; included demo media is sanitized and its provenance is documented.
+- [x] The clean local history intended for publication contains no removed provider artwork, credentials, generated source metadata, or local-only files.
+- [x] Provider image provenance and current brand-guideline compliance are documented.
+- [x] No provider asset is marked `Blocked` in `docs/ASSET_PROVENANCE.md`.
+- [x] `README.md`, `PRIVACY.md`, `SECURITY.md`, and third-party notices match runtime behavior.
+- [x] Issue templates, pull request template, Code of Conduct, and contribution guidance are present.
+- [x] Threat model, support guidance, and repository settings match the release candidate.
+- [x] Repository description, topics, owner namespace, and public support contact are final.
+- [x] The replacement publication repository contains only the reviewed branch and release-candidate tag, with no predecessor pull-request refs or forks.
+- [x] The private release candidate is tested before changing repository visibility.
