@@ -2,7 +2,7 @@
 
 Last reviewed: 2026-08-04.
 
-The reviewed source is prepared for public release-candidate publication. Remaining provider-specific scenarios are tracked as manual compatibility checks and do not contain or require publishing account data.
+The reviewed source is published as a public release candidate. Remaining provider-specific scenarios are tracked as manual compatibility checks and do not contain or require publishing account data.
 
 ## Completed locally
 
