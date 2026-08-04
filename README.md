@@ -14,7 +14,7 @@ ChatGPT, Claude, Antigravity, and OpenCode indicators are loaded from applicatio
 
 ![Usage Tray Pill showing Codex usage in the Windows 11 taskbar](docs/media/usage-tray-pill-use-case.png)
 
-https://github.com/user-attachments/assets/dd0068fd-8b2c-4fd8-aea5-627650e09518
+https://github.com/user-attachments/assets/1f7a0588-d80b-4f79-ab9f-c70e5b1f08a8
 
 [Download the demo video](docs/media/usage-tray-pill-demo.mp4)
 
