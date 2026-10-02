@@ -35,7 +35,9 @@ function Get-NumberOrNull {
     }
 
     try {
-        return [double]$Value
+        $number=[double]$Value
+        if([double]::IsNaN($number) -or [double]::IsInfinity($number) -or $number -lt 0 -or $number -gt 100){return $null}
+        return $number
     }
     catch {
         return $null
@@ -49,7 +51,7 @@ function Get-RemainingPercent {
         return $null
     }
 
-    return [int][Math]::Max(0, [Math]::Min(100, [Math]::Round(100 - [double]$UsedPercent)))
+    return 100 - [double]$UsedPercent
 }
 
 function Save-ClaudeUsage {
@@ -173,9 +175,10 @@ function New-StatuslineSnapshot {
             $limits += [pscustomobject]@{
                 key = [string]$property.Name
                 label = Get-RateLimitLabel -Key ([string]$property.Name) -RateLimit $rateLimit
-                usedPercent = $(if ($null -ne $used) { [int][Math]::Round($used) } else { $null })
+                usedPercent = $used
                 remainingPercent = Get-RemainingPercent $used
                 resetsAt = Format-UnixDateForStorage $rateLimit.resets_at
+                observedAt = Format-DateForStorage (Get-Date)
             }
         }
     }
@@ -186,10 +189,10 @@ function New-StatuslineSnapshot {
         lastError = ""
         modelName = [string]$Payload.model.display_name
         version = [string]$Payload.version
-        fiveHourUsedPercent = $(if ($null -ne $fiveUsed) { [int][Math]::Round($fiveUsed) } else { $null })
+        fiveHourUsedPercent = $fiveUsed
         fiveHourRemainingPercent = Get-RemainingPercent $fiveUsed
         fiveHourResetsAt = Format-UnixDateForStorage $Payload.rate_limits.five_hour.resets_at
-        sevenDayUsedPercent = $(if ($null -ne $sevenUsed) { [int][Math]::Round($sevenUsed) } else { $null })
+        sevenDayUsedPercent = $sevenUsed
         sevenDayRemainingPercent = Get-RemainingPercent $sevenUsed
         sevenDayResetsAt = Format-UnixDateForStorage $Payload.rate_limits.seven_day.resets_at
         limits = @($limits)
@@ -201,7 +204,12 @@ function Merge-StatuslineSnapshot {
 
     if ($null -eq $Previous) { return $Current }
     $merged = @{}
-    foreach ($limit in @($Previous.limits | Where-Object { [string]$_.key -in @("five_hour", "seven_day") })) { $merged[[string]$limit.key] = $limit }
+    foreach ($limit in @($Previous.limits | Where-Object { [string]$_.key -in @("five_hour", "seven_day") })) {
+        if ($limit.PSObject.Properties.Name -notcontains 'observedAt') {
+            $limit | Add-Member -NotePropertyName observedAt -NotePropertyValue ([string]$Previous.lastCheckedAt)
+        }
+        $merged[[string]$limit.key] = $limit
+    }
     foreach ($limit in @($Current.limits)) { $merged[[string]$limit.key] = $limit }
     $Current.limits = @($merged.Values)
 
@@ -252,10 +260,10 @@ function Invoke-SelfTest {
     } | ConvertTo-Json -Depth 8 | ConvertFrom-Json
 
     $statusline = New-StatuslineSnapshot $statuslinePayload
-    Assert-SelfTest ($statusline.fiveHourUsedPercent -eq 51) "statusline five-hour used"
-    Assert-SelfTest ($statusline.fiveHourRemainingPercent -eq 49) "statusline five-hour remaining"
-    Assert-SelfTest ($statusline.sevenDayUsedPercent -eq 58) "statusline seven-day used"
-    Assert-SelfTest ($statusline.sevenDayRemainingPercent -eq 42) "statusline seven-day remaining"
+    Assert-SelfTest ([Math]::Abs($statusline.fiveHourUsedPercent - 51.2) -lt 0.001) "statusline five-hour used precision"
+    Assert-SelfTest ([Math]::Abs($statusline.fiveHourRemainingPercent - 48.8) -lt 0.001) "statusline five-hour remaining precision"
+    Assert-SelfTest ([Math]::Abs($statusline.sevenDayUsedPercent - 58.4) -lt 0.001) "statusline seven-day used precision"
+    Assert-SelfTest ([Math]::Abs($statusline.sevenDayRemainingPercent - 41.6) -lt 0.001) "statusline seven-day remaining precision"
     Assert-SelfTest (-not [string]::IsNullOrWhiteSpace($statusline.fiveHourResetsAt)) "statusline reset parsing"
     Assert-SelfTest (@($statusline.limits).Count -eq 2) "statusline must normalize 5-hour and weekly usage"
     Assert-SelfTest (Test-StatuslinePayloadHasRateLimits $statuslinePayload) "payload with rate limits must be recognized"
@@ -299,8 +307,7 @@ try {
     $previous = Get-SavedClaudeUsage
     if (-not (Test-StatuslinePayloadHasRateLimits $payload)) {
         if ($null -ne $previous -and @($previous.limits).Count -gt 0) {
-            $previous.lastCheckedAt = Format-DateForStorage (Get-Date)
-            $previous.lastError = ""
+            # A statusline without quotas is not a new usage observation.
             if (-not [string]::IsNullOrWhiteSpace([string]$payload.model.display_name)) { $previous.modelName = [string]$payload.model.display_name }
             if (-not [string]::IsNullOrWhiteSpace([string]$payload.version)) { $previous.version = [string]$payload.version }
             Save-ClaudeUsage $previous

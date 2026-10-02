@@ -1,69 +1,77 @@
 <p align="center">
-  <img src="assets/utp-logo.svg" width="160" alt="Usage Tray Pill logo">
+  <img src="assets/utp-logo.svg" width="72" alt="Usage Tray Pill logo">
 </p>
 
-# Usage Tray Pill (UTP)
+<h1 align="center">Usage Tray Pill</h1>
+<p align="center">Your AI usage, one glance away.</p>
+<p align="center">
+  <a href="https://github.com/Novendum/usage-tray-pill/actions/workflows/test.yml"><img src="https://github.com/Novendum/usage-tray-pill/actions/workflows/test.yml/badge.svg" alt="Tests and secret scan"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-172338" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/platform-Windows_11-2563eb" alt="Windows 11">
+</p>
 
-Usage Tray Pill is an unofficial Windows 11 tray utility that shows remaining ChatGPT/Codex, Claude, Antigravity, OpenCode Go, and Qwen Token Plan usage in a compact taskbar pill.
+![Small pill. Clear limits. AI usage, in your Windows taskbar.](docs/media/utp-launch-cover.png)
 
-UTP is not affiliated with, endorsed by, or sponsored by OpenAI, Anthropic, Google, OpenCode, Anomaly, Qwen, or Alibaba Cloud.
+A small Windows utility for checking remaining **Codex, Claude, Antigravity, OpenCode Go and Qwen Token Plan** allowances from your taskbar. Click to switch providers. Open the overview when you want the details.
 
-ChatGPT, Claude, Antigravity, and OpenCode indicators are loaded from applications already installed on the user's computer. The official Qwen Code icon is distributed under Apache-2.0 only as a small provider indicator. A neutral UTP fallback is shown when another installed icon cannot be found.
+**[Quick start](#quick-start)** · **[Provider setup](docs/PROVIDERS.md)** · **[What's changed](CHANGELOG.md)** · **[Report a bug](https://github.com/Novendum/usage-tray-pill/issues)**
 
-## Demo
+## At home in your taskbar
 
-![Usage Tray Pill showing Codex usage in the Windows 11 taskbar](docs/media/usage-tray-pill-use-case.png)
+![Actual UTP pills in light and dark themes, showing illustrative Codex and Claude allowances](docs/media/utp-pill-themes.png)
 
-https://github.com/user-attachments/assets/1f7a0588-d80b-4f79-ab9f-c70e5b1f08a8
+- **A clear glance.** Bold text, smooth rounded edges and crisp icons. The pill follows your Windows taskbar's light or dark theme.
+- **A quiet interaction.** Click to cycle providers, right-click for actions. No hover popup. Transitions respect Windows animation preferences.
+- **Freshness you can understand.** Background collection, refresh controls and explicit unavailable states. Missing data appears as `--`.
+- **Your choice of sources.** Select the Codex allowance bucket and enable optional integrations in Preferences. Disable OpenCode Go or Qwen without losing the saved connection.
+- **Local by design.** Settings and caches stay on your PC. No UTP account or telemetry service. Provider requests use the connections described in [Privacy](PRIVACY.md).
 
-[Download the demo video](docs/media/usage-tray-pill-demo.mp4)
+## A closer look
 
-## Current status
+![UTP usage overview with illustrative remaining allowances and Qwen paused](docs/media/utp-overview.png)
 
-UTP is a public open-source release candidate under active development. The published source has been reviewed for release, while provider compatibility remains best-effort because provider-owned interfaces can change.
+The overview brings available allowance windows together, with separate Details and Preferences tabs. These images use **fictitious values** rendered by the actual app; setup-required and paused providers are shown deliberately. The cover is generated product artwork with illustrative values, not a pixel-exact screenshot.
 
-See [Open-Source Readiness](docs/OPEN_SOURCE_READINESS.md) for the current evidence and remaining manual compatibility checks.
-Maintainers can use [Repository Settings](docs/REPOSITORY_SETTINGS.md) for the public GitHub configuration.
+## Quick start
 
-The first release uses an English Windows interface, source documentation, and contribution guidance. Additional UI languages may be added later.
+You need **Windows 11**, **Windows PowerShell 5.1**, and a supported, signed-in provider. Configure only the providers you use.
 
-## Features
+1. [Download the source ZIP](https://github.com/Novendum/usage-tray-pill/archive/refs/heads/main.zip) and extract the **whole folder**, or clone this repository.
+2. Review the scripts, then double-click **`Start-UsageTrayPill.cmd`**.
+3. Right-click the pill to open its menu. Open the overview and Preferences to choose your sources.
 
-- Compact weekly ChatGPT/Codex usage pill.
-- Expandable Claude pill with 5-hour and weekly limits.
-- Dynamic Antigravity pill with conservative model-family quota groups.
-- Optional OpenCode Go pill with 5-hour, weekly, and monthly limits.
-- Optional Qwen Token Plan pill with 5-hour and weekly limits.
-- Click-only provider switching; hovering never changes the provider.
-- Right-clicking the pill opens the same menu as the notification-area icon.
-- Automatic hiding while a fullscreen application is active.
-- Hidden startup without a visible PowerShell window.
-- Light and dark UTP application icons.
-- Local reset-bank and limit notes.
-- Clean shutdown of the tray and its explicitly owned helper processes.
+No administrator rights are required. Keep the runtime `.ps1` and `.cs` files, launcher files and `assets` together; UTP runs from this folder.
 
-## Requirements
+| Provider | What you need | Integration |
+| --- | --- | --- |
+| ChatGPT / Codex | Signed-in Codex CLI or compatible ChatGPT desktop installation | Local Codex app-server; selectable allowance bucket |
+| Claude | Claude Code statusline integration, or Claude Desktop usage history | Optional CLI quotas are experimental and off by default |
+| Antigravity | Separately installed, signed-in Antigravity CLI | Read-only `/usage` command; desktop app alone is insufficient |
+| OpenCode Go | Go subscription and a Go API key you supply | Official usage endpoint; off by default |
+| Qwen Token Plan | Compatible QwenCloud plan and dashboard session | Experimental dashboard adapter; off by default |
 
-- Windows 11.
-- Windows PowerShell 5.1.
-- Codex CLI or the ChatGPT desktop app, signed in, for ChatGPT/Codex usage.
-- Claude Code or Claude Desktop, signed in, for Claude usage.
-- Antigravity, signed in and running, for Antigravity usage.
-- An OpenCode Go workspace and an active dashboard session for OpenCode Go usage.
-- A QwenCloud Token Plan and an active dashboard session for Qwen usage.
+Follow the [provider setup guide](docs/PROVIDERS.md) for connection steps, migration notes and known limitations. A provider's absence does not require installing it just to try UTP.
 
-## Install
+<details>
+<summary><strong>Optional shortcuts and startup</strong></summary>
 
-No administrator rights are required. Clone or download the repository, review the PowerShell scripts, then run:
+Run only the installers you want from Windows PowerShell in the extracted folder:
 
 ```powershell
 .\Install-DesktopShortcut.ps1
 .\Install-StartMenuShortcut.ps1
 .\Install-Startup.ps1
+```
+
+Claude's statusline integration is separate:
+
+```powershell
 .\Install-ClaudeStatusLine.ps1
 ```
 
-If Windows PowerShell blocks the reviewed scripts because of the current execution policy, allow them only for the current terminal session:
+Installers preserve unrelated shortcuts and existing statuslines. Use `-Force` only when you deliberately want to replace one. Claude settings changes create a backup.
+
+If your execution policy blocks reviewed scripts, you can allow them for the current terminal session:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
@@ -71,111 +79,50 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 This does not change the permanent user or machine policy.
 
-The installers refuse to overwrite unrelated shortcuts or an existing Claude statusline. Review the existing integration first; use `-Force` only when you intentionally want UTP to replace it. Every Claude settings change creates a timestamped backup.
+</details>
 
-Start UTP manually with:
+<details>
+<summary><strong>Updating and uninstalling</strong></summary>
 
-```powershell
-.\Start-UsageTrayPill.cmd
-```
+Exit UTP before replacing its application files. Extract the complete update into the same folder, then launch it again. If you move the folder, recreate your shortcuts and Claude statusline integration from the new location.
 
-Remove automatic startup with:
+OpenCode Go users migrating from the dashboard adapter must supply a Go API key through setup. Old encrypted cookie records are preserved but no longer used.
+
+Remove the optional integrations independently:
 
 ```powershell
 .\Uninstall-Startup.ps1
-```
-
-Remove the desktop shortcut with:
-
-```powershell
 .\Uninstall-DesktopShortcut.ps1
-```
-
-Remove the Start-menu shortcut with:
-
-```powershell
 .\Uninstall-StartMenuShortcut.ps1
-```
-
-Remove the UTP-managed Claude statusline with:
-
-```powershell
 .\Uninstall-ClaudeStatusLine.ps1
 ```
 
-## Usage sources
+Settings and caches remain in `%APPDATA%\UsageTrayPill`. Delete that directory yourself only if you also want to remove settings, notes and saved UTP connections.
 
-### ChatGPT/Codex
+</details>
 
-UTP starts the locally installed `codex app-server --stdio` command and requests `account/rateLimits/read`. This local interface is experimental and may change between Codex releases.
+## Status and limitations
 
-### Claude
+UTP is a **public open-source release candidate**. The repository contains the source; provider compatibility can change independently of UTP. See the [readiness record](docs/OPEN_SOURCE_READINESS.md) for what was tested and what remains open.
 
-The supported source is the Claude Code statusline JSON. Install the UTP statusline integration with:
+Most active collectors normally check once a minute; enabled Qwen checks every two minutes. Cache changes reach the UI on a 500 ms tick. These are polling intervals, not a promise of instant provider updates. Authentication errors pause collection, and temporary errors use bounded retry delays.
 
-```powershell
-.\Install-ClaudeStatusLine.ps1
-```
+The [earlier demo](https://github.com/user-attachments/assets/1f7a0588-d80b-4f79-ab9f-c70e5b1f08a8) shows the original release-candidate design. The screenshots above represent the current code in this branch.
 
-Claude documents 5-hour and 7-day usage fields in its statusline. UTP may also read Claude Desktop's local usage history as a fallback.
+## Contribute
 
-### Antigravity
-
-UTP reads model quota percentages and reset timestamps from the loopback-only language server started by the local Antigravity application. Antigravity must be running. UTP validates the process and its owned listening ports, keeps the temporary CSRF value in memory only, and stores no account details or provider tokens. There is deliberately no cloud API or OAuth fallback.
-
-### OpenCode Go
-
-OpenCode Go is disabled by default. Open the tray menu and choose **Set up OpenCode Go**. Supply the workspace ID from the dashboard URL and only the value of the signed-in dashboard cookie named `auth`.
-
-UTP stores that cookie with Windows DPAPI for the current Windows user. It never reads OpenCode's `auth.json`, API keys, or browser cookie database. Every refresh is a direct HTTPS request to:
-
-```text
-https://opencode.ai/workspace/<workspace-id>/go
-```
-
-The dashboard currently exposes rolling 5-hour, weekly, and monthly usage. This is an undocumented dashboard format rather than a stable public API, so OpenCode changes may require an adapter update. Temporary network, server, parser, or rate-limit errors keep a last-known result for at most six hours. Expired authentication is not shown as current data.
-
-For managed setups, `OPENCODE_GO_WORKSPACE_ID` and `OPENCODE_GO_AUTH_COOKIE` may be supplied together as environment variables. They take precedence over UTP's encrypted local credential.
-
-### Qwen Token Plan
-
-Qwen is disabled by default. Open the tray menu and choose **Set up Qwen Token Plan**. In the QwenCloud dashboard, open DevTools, refresh the subscription page, select the `tool/user/info.json` request, and copy only the value of **Request Headers > Cookie** into UTP's local setup dialog. Never paste this value into a bug report or chat.
-
-UTP encrypts the session header with Windows DPAPI for the current Windows user. It does not read Qwen CLI settings, API keys, or browser cookie databases. The Qwen API key shown on the dashboard is for model inference and does not grant access to subscription usage.
-
-Every refresh requests only `home.qwencloud.com/tool/user/info.json` and the Token Plan usage gateway on `cs-data.qwencloud.com`. Automatic refreshes run once every two minutes, with overlapping refresh processes blocked. These are dashboard interfaces rather than a documented stable usage API. Temporary network, server, parser, or rate-limit errors keep a last-known result for at most six hours; expired authentication clears the displayed values.
-
-For managed setups, `QWEN_TOKEN_PLAN_COOKIE` may supply the complete Cookie request-header value. It takes precedence over UTP's encrypted local credential.
-
-### Why Cursor is not supported
-
-Cursor shows individual subscription usage in its own editor and web dashboard, but does not currently document a personal usage API, CLI command, extension command, or durable local usage file that UTP can safely read. Cursor's official [Admin API](https://docs.cursor.com/en/account/teams/admin-api) provides programmatic usage data only to team administrators.
-
-UTP deliberately does not reuse Cursor authentication, call undocumented internal services, scrape the dashboard, or parse volatile application caches. Those approaches would be fragile, depend on private implementation details, and could expose credentials. Cursor support can be reconsidered if Cursor publishes a personal usage API or another explicitly supported integration.
-
-## Local data
-
-UTP stores its own settings and cached percentages in:
-
-```text
-%APPDATA%\UsageTrayPill
-```
-
-See [PRIVACY.md](PRIVACY.md) for the exact files and data access boundaries.
-See [Threat Model](docs/THREAT_MODEL.md) for trust boundaries, controls, and accepted limitations.
-
-## Testing
+Bug reports, provider compatibility notes and focused pull requests are welcome. Please keep account data and credentials out of reports.
 
 ```powershell
 .\Test-UsageTrayPill.ps1
 ```
 
-The aggregate test covers script parsing, dynamic provider switching, fullscreen detection, dynamic pill layouts, hidden launching, Claude snapshot handling, Antigravity quota normalization, OpenCode Go and Qwen dashboard parsing, DPAPI storage, and provider credential isolation.
+Run tests in **Windows PowerShell 5.1**. Tests cover provider parsing, refresh lifecycle, interaction, DPI rendering and credential boundaries using isolated fixtures; passing offline tests does not prove every account or plan works.
 
-## Stability
+[Contributing](CONTRIBUTING.md) · [Architecture](docs/ARCHITECTURE.md) · [Support](SUPPORT.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md)
 
-UTP depends on local or dashboard interfaces and file formats owned by OpenAI, Anthropic, Google, OpenCode, Anomaly, Qwen, and Alibaba Cloud. Provider updates can temporarily break usage collection. Unavailable or expired values are displayed as `--`.
+## License and independence
 
-## License
+UTP is unofficial and is not affiliated with or endorsed by the providers it displays.
 
-UTP source code is available under the [MIT License](LICENSE). The bundled Qwen Code icon is covered by its [Apache-2.0 license](THIRD_PARTY_LICENSES/QWEN_CODE_APACHE-2.0.txt). Third-party names and trademarks remain the property of their respective owners. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Source: [MIT](LICENSE). The bundled Qwen Code indicator: [Apache-2.0](THIRD_PARTY_LICENSES/QWEN_CODE_APACHE-2.0.txt). Other runtime provider indicators come from installed applications, with a neutral fallback when absent. Names and trademarks belong to their respective owners. See [third-party notices](THIRD_PARTY_NOTICES.md) and [asset provenance](docs/ASSET_PROVENANCE.md).

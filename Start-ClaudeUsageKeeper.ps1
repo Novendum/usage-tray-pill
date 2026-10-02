@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$WorkingDirectory = $env:USERPROFILE,
     [int]$MaxConsecutiveFastFailures = 3,
     [int]$FastFailureSeconds = 10,
@@ -46,55 +46,9 @@ function Set-KeeperCooldown {
     }
 }
 
-function Get-ClaudeExecutablePath {
-    $desktopRoot = Join-Path $env:APPDATA "Claude\claude-code"
-    if (Test-Path -LiteralPath $desktopRoot) {
-        $desktopCandidates = @(
-            Get-ChildItem -LiteralPath $desktopRoot -Directory -ErrorAction SilentlyContinue |
-                ForEach-Object {
-                    $version = $null
-                    if ([version]::TryParse($_.Name, [ref]$version)) {
-                        $executable = Join-Path $_.FullName "claude.exe"
-                        if (Test-Path -LiteralPath $executable) {
-                            [pscustomobject]@{ Version = $version; Path = $executable }
-                        }
-                    }
-                } |
-                Sort-Object Version -Descending
-        )
-        if ($desktopCandidates.Count -gt 0) {
-            return [string]$desktopCandidates[0].Path
-        }
-    }
+. (Join-Path $PSScriptRoot "ExternalUsageAdapters.ps1")
 
-    $knownPaths = @(
-        (Join-Path $env:LOCALAPPDATA "Volta\tools\image\packages\@anthropic-ai\claude-code\node_modules\@anthropic-ai\claude-code\node_modules\@anthropic-ai\claude-code-win32-x64\claude.exe")
-    )
-
-    foreach ($path in $knownPaths) {
-        if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path)) {
-            return $path
-        }
-    }
-
-    $commands = @(
-        Get-Command -Name @("claude.exe", "claude.cmd", "claude") -All -CommandType Application -ErrorAction SilentlyContinue
-    )
-    foreach ($command in $commands) {
-        if ($null -eq $command -or [string]::IsNullOrWhiteSpace([string]$command.Source)) { continue }
-        try {
-            $resolvedPath = [System.IO.Path]::GetFullPath([string]$command.Source)
-            $extension = [System.IO.Path]::GetExtension($resolvedPath).ToLowerInvariant()
-            if ($extension -in @(".exe", ".cmd", ".bat") -and (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
-                return $resolvedPath
-            }
-        }
-        catch {
-        }
-    }
-
-    return ""
-}
+function Get-ClaudeExecutablePath { return Resolve-UtpClaudeUsageCli }
 
 try {
     [Console]::Title = "Usage Tray Pill - Claude Keeper"

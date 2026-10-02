@@ -1,6 +1,10 @@
 # UTP runtime data
 data.json
 claude-usage.json
+claude-control-usage.json
+codex-usage.json
+refresh-requests.json
+refresh-consumed-*.json
 antigravity-usage.json
 opencode-go-usage.json
 opencode-go-credentials.json

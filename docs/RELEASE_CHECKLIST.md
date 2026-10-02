@@ -1,34 +1,35 @@
-# Release Checklist
+# Release checklist
 
-- [x] Full `Test-UsageTrayPill.ps1` suite passes on Windows PowerShell 5.1.
-- [x] Manual launch works from an arbitrary path such as `C:\Tools\usage-tray-pill`.
-- [x] Startup and desktop shortcut install/uninstall paths work.
-- [x] No visible PowerShell or CMD window remains after hidden launch.
-- [x] ChatGPT/Codex weekly usage refreshes or fails without clearing valid cached data.
-- [x] Claude statusline refreshes 5-hour and weekly usage after a real Claude response.
-- [x] Claude usage works without reading provider credentials or calling an experimental usage endpoint.
-- [x] OpenCode Go remains absent from the click cycle until explicitly configured.
-- [x] OpenCode Go 5-hour, weekly, and monthly usage refreshes from a real workspace dashboard.
-- [ ] OpenCode Go setup, expired-session, rate-limit, stale-cache, disable, and DPAPI current-user behavior are manually verified.
-- [x] OpenCode Go does not read OpenCode-owned auth files, API keys, or browser cookie databases.
-- [x] Qwen remains absent from the click cycle until explicitly configured.
-- [x] Qwen 5-hour and weekly usage refreshes from a real Token Plan dashboard session.
-- [ ] Qwen setup, expired-session, rate-limit, stale-cache, disable, and DPAPI current-user behavior are manually verified.
-- [x] Qwen does not read Qwen-owned settings, API keys, or browser cookie databases.
-- [x] Antigravity quota groups refresh from a real running Antigravity session.
-- [x] All five provider pill layouts are visually confirmed on the user's current Windows display setup, including logo alignment and dynamic widths.
-- [x] Provider failures and rate limits do not create process storms.
-- [x] The pill hides for fullscreen video and games and returns afterward.
-- [x] Exiting the tray stops only UTP-owned helpers.
-- [x] Repository and complete Git history pass the Gitleaks GitHub Actions job.
-- [x] GitHub Actions dependencies remain pinned to reviewed commit SHAs.
-- [x] Runtime data, logs, user paths, and account details are absent; included demo media is sanitized and its provenance is documented.
-- [x] The clean local history intended for publication contains no removed provider artwork, credentials, generated source metadata, or local-only files.
-- [x] Provider image provenance and current brand-guideline compliance are documented.
-- [x] No provider asset is marked `Blocked` in `docs/ASSET_PROVENANCE.md`.
-- [x] `README.md`, `PRIVACY.md`, `SECURITY.md`, and third-party notices match runtime behavior.
-- [x] Issue templates, pull request template, Code of Conduct, and contribution guidance are present.
-- [x] Threat model, support guidance, and repository settings match the release candidate.
-- [x] Repository description, topics, owner namespace, and public support contact are final.
-- [x] The replacement publication repository contains only the reviewed branch and release-candidate tag, with no predecessor pull-request refs or forks.
-- [x] The private release candidate is tested before changing repository visibility.
+October 2026 update. Each checkmark applies only to evidence recorded in [Open-source readiness](OPEN_SOURCE_READINESS.md), not to every future commit.
+
+## Local candidate
+
+- [x] README separates quick start, optional setup, requirements and limitations.
+- [x] Privacy, security and architecture describe the new collection paths.
+- [x] Product images use isolated synthetic values; generated cover is identified as brand artwork.
+- [x] Online history and earlier demo/public-status fixes are identified for preservation.
+- [x] Final candidate passes the aggregate Windows PowerShell 5.1 suite after extraction to a path with spaces.
+- [x] Final candidate passes Gitleaks and a runtime-data/credential filename check.
+- [x] File manifest and visual-asset hashes match the reviewed package.
+
+## Provider compatibility
+
+- [x] Local signed-in reads were observed for Codex, Claude CLI 2.1.286, Antigravity CLI 1.2.14 and OpenCode Go during October development.
+- [x] Offline regressions cover authentication pauses, retries, missing data, enable/disable behavior and credential boundaries.
+- [ ] Full manual OpenCode Go setup, expired-key, subscription, rate-limit and cross-user DPAPI matrix.
+- [ ] Full manual Qwen plan/session matrix. Qwen remains optional and off by default.
+- [ ] Fresh-user Windows installation and multiple physical display/scaling combinations.
+
+Fixtures and an owner session do not establish universal provider compatibility. Retain these limitations in release notes.
+
+## GitHub publication
+
+- [x] Integrate onto current public main through an authorized checkout/branch, retaining existing history.
+- [ ] Review the complete diff and new files/media; scan the actual proposed Git history.
+- [ ] Both required GitHub checks pass on the update.
+- [ ] Verify README links, images and install instructions in GitHub.
+- [ ] Merge after maintainer authorization.
+- [ ] Build and test the final archive from the merged commit; choose and publish the release after authorization.
+- [ ] Check the public download before posting the announcement.
+
+Historical July/August checkmarks are not proof for this update. Local preparation does not create a tag, release or history rewrite.

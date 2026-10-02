@@ -55,3 +55,15 @@ ChatGPT, Claude, Antigravity, and OpenCode indicators are loaded at runtime from
 OpenAI requires marks to relate directly to its services, remain unmodified, avoid implying endorsement, and remain less prominent than the project's own identity. UTP does not copy or redistribute provider artwork; an icon already installed on the user's computer is used only as a small provider indicator.
 
 Guidance last reviewed: 2026-07-26.
+
+## October 2026 launch media
+
+- `docs/media/utp-launch-cover.png`: new brand artwork made with the built-in image generation tool on 2026-10-02. Stylized product artwork based on the existing cover, the synthetic light/dark rendering board and a maintainer-supplied close-up of the light pill. It shows a sharp light OpenAI pill and a softly blurred dark Claude pill with illustrative values. This is generated artwork, not a pixel-exact application screenshot. Provider marks appear only within the depicted product interface; no account identifiers or credentials were supplied. The exact prompt is in `docs/media/launch-cover-prompt.txt`. The original image retains its generation provenance metadata.
+- `docs/media/utp-pill-themes.png`: an editorial comparison board drawn with the production UTP renderer by `Test-UtpInteractions.ps1 -OutputDirectory <temporary-directory>`, at 200% logical DPI. The labels and both themes are real app rendering; all quota values are synthetic.
+- `docs/media/utp-overview.png`: the real WinForms overview rendered offscreen by the same isolated fixture. It shows invented values, an unconfigured Antigravity source and paused Qwen, not an account capture. Provider marks remain small indicators in product context.
+
+The README identifies the generated cover and illustrative product values. Older demo media remains historical and is labeled accordingly; it is not evidence of the current appearance.
+
+- `utp-launch-cover.png` SHA-256: `858184d120325525eb1e2eb044a84759eb05d7eef9d3fcd52d24b99887cd7f17`
+- `utp-pill-themes.png` SHA-256: `57d790f55bee07545a13f15ba15a9a9c468def624a23f6e5bed2037ecc29a35c`
+- `utp-overview.png` SHA-256: `9a1fb2086b2e6f005733abf8d72fd1c4678083bbd08aff7ca82498f34553f023`

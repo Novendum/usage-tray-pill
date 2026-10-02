@@ -1,5 +1,4 @@
-$script:OpenCodeGoDashboardOrigin = "https://opencode.ai"
-$script:OpenCodeGoSnapshotMaxAgeHours = 6
+﻿$script:OpenCodeGoSnapshotMaxAgeHours = 6
 
 function New-OpenCodeGoException {
     param(
@@ -23,42 +22,12 @@ function Get-OpenCodeGoExceptionCode {
     return "network_error"
 }
 
-function ConvertTo-OpenCodeGoWorkspaceId {
+function ConvertTo-OpenCodeGoApiKey {
     param([Parameter(Mandatory = $true)] [string]$Value)
 
     $candidate = $Value.Trim()
-    if ([string]::IsNullOrWhiteSpace($candidate)) {
-        throw (New-OpenCodeGoException -Code "invalid_workspace" -Message "Enter an OpenCode Go workspace ID or dashboard URL.")
-    }
-
-    $urlMatch = [regex]::Match($candidate, '(?i)(?:https?://opencode\.ai)?/workspace/(?<id>wrk_[A-Za-z0-9_-]+)(?:/go)?(?:[/?#].*)?$')
-    if ($urlMatch.Success) {
-        $candidate = $urlMatch.Groups["id"].Value
-    }
-
-    if ($candidate -notmatch '^wrk_[A-Za-z0-9_-]+$') {
-        throw (New-OpenCodeGoException -Code "invalid_workspace" -Message "The workspace ID must start with wrk_.")
-    }
-    return $candidate
-}
-
-function ConvertTo-OpenCodeGoAuthCookie {
-    param([Parameter(Mandatory = $true)] [string]$Value)
-
-    if ($Value -match '[\r\n]') {
-        throw (New-OpenCodeGoException -Code "invalid_auth" -Message "The auth cookie contains invalid characters.")
-    }
-
-    $candidate = $Value.Trim()
-    if ($candidate -match '(?i)(?:^|;\s*)auth=(?<value>[^;]+)') {
-        $candidate = $Matches["value"].Trim()
-    }
-    elseif ($candidate -match '^[A-Za-z][A-Za-z0-9_-]*=') {
-        throw (New-OpenCodeGoException -Code "invalid_auth" -Message "Use the value of the cookie named auth.")
-    }
-
-    if ([string]::IsNullOrWhiteSpace($candidate) -or $candidate.Length -gt 16384 -or $candidate.Contains(";")) {
-        throw (New-OpenCodeGoException -Code "invalid_auth" -Message "The OpenCode Go auth cookie is invalid.")
+    if ($Value -match '[\r\n]' -or $candidate -notmatch '^[\x21-\x7E]+$' -or $candidate.Length -gt 16384 -or $candidate.Contains(';')) {
+        throw (New-OpenCodeGoException -Code "invalid_auth" -Message "Enter only the OpenCode Go API key, without a Bearer prefix or cookie header.")
     }
     return $candidate
 }
@@ -151,36 +120,32 @@ function Write-OpenCodeGoJsonAtomically {
 }
 
 function Save-OpenCodeGoCredentials {
-    param(
-        [Parameter(Mandatory = $true)] [string]$WorkspaceId,
-        [Parameter(Mandatory = $true)] [string]$AuthCookie
-    )
-
-    $normalizedWorkspaceId = ConvertTo-OpenCodeGoWorkspaceId $WorkspaceId
-    $normalizedAuthCookie = ConvertTo-OpenCodeGoAuthCookie $AuthCookie
+    param([Parameter(Mandatory = $true)] [string]$ApiKey)
+    $normalizedApiKey = ConvertTo-OpenCodeGoApiKey $ApiKey
     $credential = [pscustomobject]@{
-        version = 1
-        workspaceId = $normalizedWorkspaceId
-        protectedAuthCookie = Protect-OpenCodeGoSecret $normalizedAuthCookie
+        version = 2
+        protectedApiKey = Protect-OpenCodeGoSecret $normalizedApiKey
         savedAt = Format-DateForStorage (Get-Date)
     }
     Write-OpenCodeGoJsonAtomically -Path $script:OpenCodeGoCredentialPath -Value $credential -MutexName "UsageTrayPillOpenCodeGoCredentialsWrite"
 }
 
-function Remove-OpenCodeGoCredentials {
-    Remove-Item -LiteralPath $script:OpenCodeGoCredentialPath -Force -ErrorAction SilentlyContinue
+function ConvertFrom-OpenCodeGoStoredCredential {
+    param([Parameter(Mandatory = $true)] [object]$Stored)
+    if ($Stored.version -ne 2) {
+        throw (New-OpenCodeGoException -Code "api_key_required" -Message "OpenCode Go now requires an API key. Set up OpenCode Go again; your previous session has been preserved.")
+    }
+    return [pscustomobject]@{
+        apiKey = ConvertTo-OpenCodeGoApiKey (Unprotect-OpenCodeGoSecret ([string]$Stored.protectedApiKey))
+        source = "dpapi"
+    }
 }
 
 function Get-OpenCodeGoCredentials {
-    $environmentWorkspace = [string]$env:OPENCODE_GO_WORKSPACE_ID
-    $environmentAuth = [string]$env:OPENCODE_GO_AUTH_COOKIE
-    if (-not [string]::IsNullOrWhiteSpace($environmentWorkspace) -or -not [string]::IsNullOrWhiteSpace($environmentAuth)) {
-        if ([string]::IsNullOrWhiteSpace($environmentWorkspace) -or [string]::IsNullOrWhiteSpace($environmentAuth)) {
-            throw (New-OpenCodeGoException -Code "incomplete_environment" -Message "Both OpenCode Go environment variables are required.")
-        }
+    $environmentApiKey = [string]$env:OPENCODE_GO_API_KEY
+    if (-not [string]::IsNullOrWhiteSpace($environmentApiKey)) {
         return [pscustomobject]@{
-            workspaceId = ConvertTo-OpenCodeGoWorkspaceId $environmentWorkspace
-            authCookie = ConvertTo-OpenCodeGoAuthCookie $environmentAuth
+            apiKey = ConvertTo-OpenCodeGoApiKey $environmentApiKey
             source = "environment"
         }
     }
@@ -191,11 +156,7 @@ function Get-OpenCodeGoCredentials {
 
     try {
         $stored = Get-Content -LiteralPath $script:OpenCodeGoCredentialPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        return [pscustomobject]@{
-            workspaceId = ConvertTo-OpenCodeGoWorkspaceId ([string]$stored.workspaceId)
-            authCookie = ConvertTo-OpenCodeGoAuthCookie (Unprotect-OpenCodeGoSecret ([string]$stored.protectedAuthCookie))
-            source = "dpapi"
-        }
+        return ConvertFrom-OpenCodeGoStoredCredential $stored
     }
     catch {
         if ((Get-OpenCodeGoExceptionCode $_) -ne "network_error") { throw }
@@ -203,95 +164,66 @@ function Get-OpenCodeGoCredentials {
     }
 }
 
-function Get-OpenCodeGoDashboardUrl {
-    param([string]$WorkspaceId)
-
-    if ([string]::IsNullOrWhiteSpace($WorkspaceId)) {
-        return $script:OpenCodeGoDashboardOrigin
+function ConvertFrom-OpenCodeGoUsageResponse {
+    param([Parameter(Mandatory = $true)] [object]$Response)
+    if ($Response -is [string]) {
+        try { $Response = $Response | ConvertFrom-Json -ErrorAction Stop }
+        catch { throw (New-OpenCodeGoException -Code 'parse_error' -Message 'OpenCode Go returned invalid JSON.') }
     }
-    $normalizedWorkspaceId = ConvertTo-OpenCodeGoWorkspaceId $WorkspaceId
-    return "$($script:OpenCodeGoDashboardOrigin)/workspace/$normalizedWorkspaceId/go"
-}
-
-function Get-OpenCodeGoObjectText {
-    param(
-        [Parameter(Mandatory = $true)] [string]$Text,
-        [Parameter(Mandatory = $true)] [string]$Key
-    )
-
-    $escapedKey = [regex]::Escape($Key)
-    $keyMatches = [regex]::Matches($Text, "(?is)(?:`"|')?$escapedKey(?:`"|')?\s*:")
-    foreach ($match in $keyMatches) {
-        $searchStart = $match.Index + $match.Length
-        $objectStart = $Text.IndexOf("{", $searchStart)
-        if ($objectStart -lt 0 -or ($objectStart - $searchStart) -gt 200) { continue }
-
-        $depth = 0
-        for ($index = $objectStart; $index -lt $Text.Length; $index++) {
-            if ($Text[$index] -eq "{") { $depth++ }
-            elseif ($Text[$index] -eq "}") {
-                $depth--
-                if ($depth -eq 0) {
-                    $candidate = $Text.Substring($objectStart, ($index - $objectStart + 1))
-                    if ($candidate -match '(?i)usagePercent') { return $candidate }
-                    break
-                }
-            }
-            if (($index - $objectStart) -gt 4096) { break }
-        }
-    }
-    return $null
-}
-
-function ConvertFrom-OpenCodeGoDashboardHtml {
-    param([Parameter(Mandatory = $true)] [string]$Html)
-
-    if ([string]::IsNullOrWhiteSpace($Html)) {
-        throw (New-OpenCodeGoException -Code "parse_error" -Message "OpenCode Go returned an empty dashboard.")
-    }
-
-    $normalized = [System.Net.WebUtility]::HtmlDecode($Html)
-    $normalized = [regex]::Replace($normalized, '\\+u0022', '"', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-    $normalized = [regex]::Replace($normalized, '\\+"', '"')
-
-    $definitions = @(
-        [pscustomobject]@{ Key = "rollingUsage"; LimitKey = "five_hour"; Label = "5h" },
-        [pscustomobject]@{ Key = "weeklyUsage"; LimitKey = "seven_day"; Label = "weekly" },
-        [pscustomobject]@{ Key = "monthlyUsage"; LimitKey = "monthly"; Label = "monthly" }
-    )
     $items = @()
-    foreach ($definition in $definitions) {
-        $objectText = Get-OpenCodeGoObjectText -Text $normalized -Key $definition.Key
-        if ([string]::IsNullOrWhiteSpace($objectText)) { continue }
-
-        $usageMatch = [regex]::Match($objectText, '(?is)(?:"|''|\\")?usagePercent(?:"|''|\\")?\s*:\s*(?<value>-?\d+(?:\.\d+)?)')
-        $resetMatch = [regex]::Match($objectText, '(?is)(?:"|''|\\")?resetInSec(?:"|''|\\")?\s*:\s*(?<value>\d+(?:\.\d+)?)')
-        if (-not $usageMatch.Success) { continue }
-
-        $usagePercent = [double]::Parse($usageMatch.Groups["value"].Value, [System.Globalization.CultureInfo]::InvariantCulture)
-        $usagePercent = [Math]::Min(100.0, [Math]::Max(0.0, $usagePercent))
-        $remainingPercent = [int][Math]::Round(100.0 - $usagePercent, 0, [MidpointRounding]::AwayFromZero)
-        $resetsAt = ""
-        if ($resetMatch.Success) {
-            $resetSeconds = [double]::Parse($resetMatch.Groups["value"].Value, [System.Globalization.CultureInfo]::InvariantCulture)
-            $resetsAt = Format-DateForStorage ((Get-Date).AddSeconds([Math]::Max(0, $resetSeconds)))
+    foreach ($definition in @(
+        @{ Name = 'rolling'; Key = 'five_hour'; Label = '5h' },
+        @{ Name = 'weekly'; Key = 'seven_day'; Label = 'weekly' },
+        @{ Name = 'monthly'; Key = 'monthly'; Label = 'monthly' }
+    )) {
+        $window = $Response.usage.($definition.Name)
+        # Require all three windows; a partial response must not imply missing limits are available.
+        $used = 0.0
+        $reset = [DateTimeOffset]::MinValue
+        if ($null -eq $window -or $null -eq $window.percent -or $window.percent -is [bool] -or
+            -not [double]::TryParse([string]$window.percent, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$used) -or
+            [double]::IsNaN($used) -or [double]::IsInfinity($used) -or $used -lt 0 -or $used -gt 100 -or
+            $window.status -notin @('ok', 'rate-limited') -or
+            -not [DateTimeOffset]::TryParse([string]$window.resetsAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$reset)) {
+            throw (New-OpenCodeGoException -Code 'parse_error' -Message 'OpenCode Go returned an incomplete or invalid quota window.')
         }
-
         $items += [pscustomobject]@{
-            key = $definition.LimitKey
+            key = $definition.Key
             label = $definition.Label
-            usedPercent = $usagePercent
-            remainingPercent = $remainingPercent
-            resetsAt = $resetsAt
+            usedPercent = $used
+            remainingPercent = 100.0 - $used
+            status = [string]$window.status
+            resetsAt = $reset.ToString('o')
         }
-    }
-
-    if ($items.Count -eq 0) {
-        throw (New-OpenCodeGoException -Code "parse_error" -Message "The OpenCode Go quotas could not be recognized in the dashboard.")
     }
     return @($items)
 }
 
+function ConvertTo-OpenCodeGoRetryAfterSeconds {
+    param([string]$Value, [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow)
+    $seconds = 0.0
+    if (-not [double]::TryParse($Value, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$seconds)) {
+        $date = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParse($Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$date)) { return 0 }
+        $seconds = ($date - $Now).TotalSeconds
+    }
+    if ([double]::IsNaN($seconds) -or [double]::IsInfinity($seconds)) { return 0 }
+    return [int][Math]::Ceiling([Math]::Min(86400, [Math]::Max(0, $seconds)))
+}
+
+function New-OpenCodeGoHttpException {
+    param([int]$StatusCode, [string]$RetryAfter = '')
+    $code = 'server_error'
+    $message = 'OpenCode Go returned an unexpected response.'
+    switch ($StatusCode) {
+        401 { $code = 'auth_expired'; $message = 'The OpenCode Go API key was rejected. Update it in Set up OpenCode Go.' }
+        403 { $code = 'subscription_required'; $message = 'This API key does not have an OpenCode Go subscription.' }
+        429 { $code = 'rate_limited'; $message = 'OpenCode Go asks you to try again later.' }
+    }
+    $exception = New-OpenCodeGoException -Code $code -Message $message
+    if ($StatusCode -eq 429) { $exception.Data['retryAfterSeconds'] = ConvertTo-OpenCodeGoRetryAfterSeconds $RetryAfter }
+    return $exception
+}
 function Read-OpenCodeGoLimitedUtf8Stream {
     param(
         [Parameter(Mandatory = $true)] [System.IO.Stream]$Stream,
@@ -305,7 +237,7 @@ function Read-OpenCodeGoLimitedUtf8Stream {
         while (($read = $Stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
             $totalBytes += $read
             if ($totalBytes -gt $MaximumBytes) {
-                throw (New-OpenCodeGoException -Code "response_too_large" -Message "The OpenCode Go dashboard is unexpectedly large.")
+                throw (New-OpenCodeGoException -Code "response_too_large" -Message "The OpenCode Go usage response is unexpectedly large.")
             }
             $memory.Write($buffer, 0, $read)
         }
@@ -324,7 +256,7 @@ function Read-OpenCodeGoResponseText {
     )
 
     if ($Response.ContentLength -gt $MaximumBytes) {
-        throw (New-OpenCodeGoException -Code "response_too_large" -Message "The OpenCode Go dashboard is unexpectedly large.")
+        throw (New-OpenCodeGoException -Code "response_too_large" -Message "The OpenCode Go usage response is unexpectedly large.")
     }
 
     $stream = $Response.GetResponseStream()
@@ -336,65 +268,41 @@ function Read-OpenCodeGoResponseText {
     }
 }
 
-function Invoke-OpenCodeGoDashboardRequest {
-    param(
-        [Parameter(Mandatory = $true)] [string]$WorkspaceId,
-        [Parameter(Mandatory = $true)] [string]$AuthCookie
-    )
-
-    $url = Get-OpenCodeGoDashboardUrl $WorkspaceId
-    $request = [System.Net.HttpWebRequest]::Create($url)
-    $request.Method = "GET"
-    $request.Accept = "text/html,application/xhtml+xml"
-    $request.UserAgent = "UsageTrayPill/1.0"
+function Invoke-OpenCodeGoUsageRequest {
+    param([Parameter(Mandatory = $true)] [string]$ApiKey)
+    $request = [System.Net.HttpWebRequest]::Create('https://opencode.ai/zen/go/v1/usage')
+    $request.Method = 'GET'
+    $request.Accept = 'application/json'
+    $request.UserAgent = 'UsageTrayPill/1.0'
     $request.AllowAutoRedirect = $false
     $request.Timeout = 12000
     $request.ReadWriteTimeout = 12000
     $request.KeepAlive = $false
-    $request.CookieContainer = New-Object System.Net.CookieContainer
-    $cookie = New-Object System.Net.Cookie("auth", (ConvertTo-OpenCodeGoAuthCookie $AuthCookie), "/", "opencode.ai")
-    $cookie.Secure = $true
-    $request.CookieContainer.Add($cookie)
-
+    $request.Headers['Authorization'] = 'Bearer ' + (ConvertTo-OpenCodeGoApiKey $ApiKey)
     $response = $null
+    $deadline=New-Object UtpRequestDeadline $request,15000
     try {
         $response = [System.Net.HttpWebResponse]$request.GetResponse()
-        $statusCode = [int]$response.StatusCode
-        if ($statusCode -ge 300 -and $statusCode -lt 400) {
-            throw (New-OpenCodeGoException -Code "auth_expired" -Message "The OpenCode Go session has expired.")
+        if ([int]$response.StatusCode -ne 200) {
+            throw (New-OpenCodeGoHttpException -StatusCode ([int]$response.StatusCode) -RetryAfter $response.Headers['Retry-After'])
         }
-        if ($statusCode -ne 200) {
-            throw (New-OpenCodeGoException -Code "server_error" -Message "OpenCode Go returned an unexpected status.")
-        }
-        if ($response.ContentLength -gt 4194304) {
-            throw (New-OpenCodeGoException -Code "response_too_large" -Message "The OpenCode Go dashboard is unexpectedly large.")
-        }
-
         return Read-OpenCodeGoResponseText -Response $response -MaximumBytes 4194304
     }
     catch [System.Net.WebException] {
         $webResponse = $_.Exception.Response
         if ($null -ne $webResponse) {
-            $statusCode = [int]$webResponse.StatusCode
-            $webResponse.Dispose()
-            if ($statusCode -in @(401, 403)) {
-                throw (New-OpenCodeGoException -Code "auth_expired" -Message "The OpenCode Go session has expired.")
-            }
-            if ($statusCode -eq 429) {
-                throw (New-OpenCodeGoException -Code "rate_limited" -Message "OpenCode Go asks you to try again later.")
-            }
-            if ($statusCode -ge 500) {
-                throw (New-OpenCodeGoException -Code "server_error" -Message "OpenCode Go is temporarily unavailable.")
-            }
+            try { $errorToThrow = New-OpenCodeGoHttpException -StatusCode ([int]$webResponse.StatusCode) -RetryAfter $webResponse.Headers['Retry-After'] }
+            finally { $webResponse.Dispose() }
+            throw $errorToThrow
         }
-        throw (New-OpenCodeGoException -Code "network_error" -Message "The OpenCode Go dashboard is unreachable.")
+        throw (New-OpenCodeGoException -Code 'network_error' -Message 'The OpenCode Go usage API is unreachable.')
     }
     finally {
         if ($null -ne $response) { $response.Dispose() }
+        $deadline.Dispose()
         $request.Abort()
     }
 }
-
 function Write-OpenCodeGoUsageSnapshot {
     param([Parameter(Mandatory = $true)] [object]$Usage)
 
@@ -415,9 +323,14 @@ function Get-OpenCodeGoUsageSnapshot {
 
     $copy = $usage | ConvertTo-Json -Depth 8 | ConvertFrom-Json
     $lastSuccess = Get-DateOrNull ([string]$copy.lastSuccessAt)
-    if ($null -eq $lastSuccess -or ((Get-Date) - $lastSuccess).TotalHours -gt $script:OpenCodeGoSnapshotMaxAgeHours) {
+    if ($null -eq $lastSuccess -or $lastSuccess -gt (Get-Date).AddMinutes(1) -or ((Get-Date) - $lastSuccess).TotalHours -gt $script:OpenCodeGoSnapshotMaxAgeHours) {
         $copy.available = $false
         foreach ($item in @($copy.items)) { $item.remainingPercent = $null }
+    }
+    if ($null -ne $lastSuccess -and ((Get-Date) - $lastSuccess).TotalMinutes -gt 5) { $copy.stale = $true }
+    foreach ($item in @($copy.items)) {
+        $reset = Get-DateOrNull ([string]$item.resetsAt)
+        if ($null -ne $reset -and $reset -le (Get-Date)) { $item.remainingPercent = $null }
     }
     return $copy
 }
@@ -425,16 +338,17 @@ function Get-OpenCodeGoUsageSnapshot {
 function Set-OpenCodeGoFailureSnapshot {
     param(
         [Parameter(Mandatory = $true)] [string]$Code,
-        [Parameter(Mandatory = $true)] [string]$Message
+        [Parameter(Mandatory = $true)] [string]$Message,
+        [int]$RetryAfterSeconds = 0
     )
 
     $previous = Read-OpenCodeGoUsageSnapshotRaw
     $preserveCodes = @("network_error", "rate_limited", "server_error", "parse_error", "response_too_large")
     $items = @()
-    $lastSuccessAt = ""
+    $lastSuccessAt = if ($null -ne $previous) { [string]$previous.lastSuccessAt } else { "" }
     if ($Code -in $preserveCodes -and $null -ne $previous) {
         $lastSuccess = Get-DateOrNull ([string]$previous.lastSuccessAt)
-        if ($null -ne $lastSuccess -and ((Get-Date) - $lastSuccess).TotalHours -le $script:OpenCodeGoSnapshotMaxAgeHours) {
+        if ($null -ne $lastSuccess -and $lastSuccess -le (Get-Date).AddMinutes(1) -and ((Get-Date) - $lastSuccess).TotalHours -le $script:OpenCodeGoSnapshotMaxAgeHours) {
             $items = @(As-Array $previous.items)
             $lastSuccessAt = [string]$previous.lastSuccessAt
         }
@@ -442,13 +356,14 @@ function Set-OpenCodeGoFailureSnapshot {
 
     Write-OpenCodeGoUsageSnapshot ([pscustomobject]@{
         version = 1
-        source = "opencode-go-dashboard"
+        source = "opencode-go-api"
         available = ($items.Count -gt 0)
         stale = ($items.Count -gt 0)
         lastCheckedAt = Format-DateForStorage (Get-Date)
         lastSuccessAt = $lastSuccessAt
         lastError = $Code
         lastErrorMessage = $Message
+        retryAfterSeconds = [Math]::Min(86400, [Math]::Max(0, $RetryAfterSeconds))
         items = @($items)
     })
 }
@@ -470,18 +385,19 @@ function Update-OpenCodeGoUsage {
             throw (New-OpenCodeGoException -Code "setup_required" -Message "OpenCode Go has not been set up.")
         }
 
-        $html = Invoke-OpenCodeGoDashboardRequest -WorkspaceId $credentials.workspaceId -AuthCookie $credentials.authCookie
-        $items = ConvertFrom-OpenCodeGoDashboardHtml $html
+        $response = Invoke-OpenCodeGoUsageRequest -ApiKey $credentials.apiKey
+        $items = ConvertFrom-OpenCodeGoUsageResponse $response
         $now = Format-DateForStorage (Get-Date)
         Write-OpenCodeGoUsageSnapshot ([pscustomobject]@{
             version = 1
-            source = "opencode-go-dashboard"
+            source = "opencode-go-api"
             available = $true
             stale = $false
             lastCheckedAt = $now
             lastSuccessAt = $now
             lastError = ""
             lastErrorMessage = ""
+            retryAfterSeconds = 0
             items = @($items)
         })
         return $true
@@ -493,10 +409,13 @@ function Update-OpenCodeGoUsage {
         } else {
             "OpenCode Go could not be refreshed."
         }
-        Set-OpenCodeGoFailureSnapshot -Code $code -Message $message
+        $retryAfterSeconds = 0
+        if ($_.Exception.Data.Contains('retryAfterSeconds')) { $retryAfterSeconds = [int]$_.Exception.Data['retryAfterSeconds'] }
+        Set-OpenCodeGoFailureSnapshot -Code $code -Message $message -RetryAfterSeconds $retryAfterSeconds
         return $false
     }
     finally {
+        $credentials = $null
         $script:OpenCodeGoUsagePollInProgress = $false
         if ($hasPollLock) {
             try { $pollMutex.ReleaseMutex() } catch {
@@ -510,10 +429,12 @@ function Get-OpenCodeGoStatusText {
     $usage = Get-OpenCodeGoUsageSnapshot
     if ($null -eq $usage) { return "not configured" }
     if ([bool]$usage.stale -and [bool]$usage.available) { return "cache" }
-    if ([bool]$usage.available) { return "dashboard" }
+    if ([bool]$usage.available) { return "usage API" }
     switch ([string]$usage.lastError) {
         "setup_required" { return "set up" }
-        "auth_expired" { return "session expired" }
+        "api_key_required" { return "API key required" }
+        "auth_expired" { return "update API key" }
+        "subscription_required" { return "Go subscription required" }
         "rate_limited" { return "try again later" }
         default { return "error" }
     }
@@ -549,67 +470,52 @@ function Show-OpenCodeGoSetupDialog {
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
-    $form.ClientSize = New-Object System.Drawing.Size 570, 297
+    $form.ClientSize = New-Object System.Drawing.Size 570, 240
 
     $intro = New-Object System.Windows.Forms.Label
     $intro.Location = New-Object System.Drawing.Point 18, 16
     $intro.Size = New-Object System.Drawing.Size 530, 54
-    $intro.Text = "Experimental: reads usage from the OpenCode Go dashboard. This format may change. The session is encrypted for your Windows account only."
+    $intro.Text = "Reads Go limits from the OpenCode usage API. Your key is encrypted for your Windows account. It can also authorize model use, so keep it private."
     $form.Controls.Add($intro)
 
-    $workspaceLabel = New-Object System.Windows.Forms.Label
-    $workspaceLabel.Location = New-Object System.Drawing.Point 18, 84
-    $workspaceLabel.Size = New-Object System.Drawing.Size 150, 20
-    $workspaceLabel.Text = "Workspace ID or URL"
-    $form.Controls.Add($workspaceLabel)
-
-    $workspaceBox = New-Object System.Windows.Forms.TextBox
-    $workspaceBox.Location = New-Object System.Drawing.Point 18, 106
-    $workspaceBox.Size = New-Object System.Drawing.Size 530, 24
-    if ($null -ne $existing) { $workspaceBox.Text = [string]$existing.workspaceId }
-    $form.Controls.Add($workspaceBox)
-
     $authLabel = New-Object System.Windows.Forms.Label
-    $authLabel.Location = New-Object System.Drawing.Point 18, 142
+    $authLabel.Location = New-Object System.Drawing.Point 18, 78
     $authLabel.Size = New-Object System.Drawing.Size 250, 20
-    $authLabel.Text = "Cookie value named auth"
+    $authLabel.Text = "OpenCode Go API key"
     $form.Controls.Add($authLabel)
 
     $authBox = New-Object System.Windows.Forms.TextBox
-    $authBox.Location = New-Object System.Drawing.Point 18, 164
+    $authBox.Location = New-Object System.Drawing.Point 18, 100
     $authBox.Size = New-Object System.Drawing.Size 530, 24
     $authBox.UseSystemPasswordChar = $true
     $form.Controls.Add($authBox)
 
     $hint = New-Object System.Windows.Forms.Label
-    $hint.Location = New-Object System.Drawing.Point 18, 193
+    $hint.Location = New-Object System.Drawing.Point 18, 134
     $hint.Size = New-Object System.Drawing.Size 530, 34
     $hint.Text = if ($null -ne $existing) {
-        "Leave the cookie blank to keep the stored session. Environment variables take precedence."
+        "Leave blank to keep your key. OPENCODE_GO_API_KEY takes precedence over a saved key."
     } else {
-        "Open the dashboard, sign in, and use DevTools > Application > Cookies to copy only the value of auth."
+        "Copy your Go API key from the OpenCode console. Your previous session stays saved until you replace it."
     }
     $form.Controls.Add($hint)
 
     $dashboardButton = New-Object System.Windows.Forms.Button
-    $dashboardButton.Location = New-Object System.Drawing.Point 18, 244
+    $dashboardButton.Location = New-Object System.Drawing.Point 18, 192
     $dashboardButton.Size = New-Object System.Drawing.Size 125, 30
-    $dashboardButton.Text = "Open dashboard"
+    $dashboardButton.Text = "Open console"
     $dashboardButton.Add_Click({
-        $workspace = $workspaceBox.Text.Trim()
-        try { Start-Process (Get-OpenCodeGoDashboardUrl $workspace) }
-        catch { Start-Process $script:OpenCodeGoDashboardOrigin }
+        Start-Process 'https://opencode.ai/console'
     })
     $form.Controls.Add($dashboardButton)
 
     $removeButton = New-Object System.Windows.Forms.Button
-    $removeButton.Location = New-Object System.Drawing.Point 153, 244
+    $removeButton.Location = New-Object System.Drawing.Point 153, 192
     $removeButton.Size = New-Object System.Drawing.Size 120, 30
     $removeButton.Text = "Disable"
     $removeButton.Enabled = ($null -ne $existing -or [bool]$script:State.settings.openCodeGoEnabled)
     $removeButton.Add_Click({
-        Remove-OpenCodeGoCredentials
-        Remove-Item -LiteralPath $script:OpenCodeGoUsagePath -Force -ErrorAction SilentlyContinue
+        Stop-OpenCodeGoUsageRefresh
         $script:State.settings.openCodeGoEnabled = $false
         if ([string]$script:State.settings.taskbarBadgeDefaultSource -eq "opencodego") {
             $script:State.settings.taskbarBadgeDefaultSource = "codex"
@@ -621,34 +527,26 @@ function Show-OpenCodeGoSetupDialog {
     $form.Controls.Add($removeButton)
 
     $cancelButton = New-Object System.Windows.Forms.Button
-    $cancelButton.Location = New-Object System.Drawing.Point 374, 244
+    $cancelButton.Location = New-Object System.Drawing.Point 374, 192
     $cancelButton.Size = New-Object System.Drawing.Size 80, 30
     $cancelButton.Text = "Cancel"
     $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($cancelButton)
 
     $saveButton = New-Object System.Windows.Forms.Button
-    $saveButton.Location = New-Object System.Drawing.Point 464, 244
+    $saveButton.Location = New-Object System.Drawing.Point 464, 192
     $saveButton.Size = New-Object System.Drawing.Size 84, 30
     $saveButton.Text = "Save"
     $saveButton.Add_Click({
         try {
-            $workspaceId = ConvertTo-OpenCodeGoWorkspaceId $workspaceBox.Text
-            $authCookie = $authBox.Text
-            if ([string]::IsNullOrWhiteSpace($authCookie)) {
+            $apiKey = $authBox.Text
+            if ([string]::IsNullOrWhiteSpace($apiKey)) {
                 if ($null -eq $existing) {
-                    throw (New-OpenCodeGoException -Code "invalid_auth" -Message "Enter the auth cookie.")
+                    throw (New-OpenCodeGoException -Code "api_key_required" -Message "Enter your OpenCode Go API key.")
                 }
-                if ([string]$existing.source -eq "environment") {
-                    $script:State.settings.openCodeGoEnabled = $true
-                    Save-State
-                    $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
-                    $form.Close()
-                    return
-                }
-                $authCookie = [string]$existing.authCookie
+            } else {
+                Save-OpenCodeGoCredentials -ApiKey $apiKey
             }
-            Save-OpenCodeGoCredentials -WorkspaceId $workspaceId -AuthCookie $authCookie
             $script:State.settings.openCodeGoEnabled = $true
             Save-State
             $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -667,8 +565,8 @@ function Show-OpenCodeGoSetupDialog {
     $form.AcceptButton = $saveButton
     $form.CancelButton = $cancelButton
 
-    $result = $form.ShowDialog()
-    $form.Dispose()
+    try { $result = $form.ShowDialog() }
+    finally { $authBox.Clear(); $existing = $null; $form.Dispose() }
     if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
         Start-OpenCodeGoUsageRefresh
         Refresh-Tray
