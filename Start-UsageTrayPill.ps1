@@ -684,6 +684,7 @@ function Format-TimeLeft {
 . (Join-Path $PSScriptRoot "OpenCodeGo.ps1")
 . (Join-Path $PSScriptRoot "QwenTokenPlan.ps1")
 . (Join-Path $PSScriptRoot "CollectorPolicy.ps1")
+. (Join-Path $PSScriptRoot "ExternalUsageAdapters.ps1")
 
 function Get-ResetStatus {
     param($Reset)
@@ -1131,7 +1132,7 @@ function Invoke-CodexRateLimitsRead {
             Close-CodexConnection
             $process=New-Object System.Diagnostics.Process
             $process.StartInfo=New-CodexAppServerStartInfo -CodexPath (Resolve-CodexCommandPath)
-            if(-not $process.Start()){throw 'Could not start Codex.'}
+            if(-not (Start-UtpUsageProcess -Process $process)){throw 'Could not start Codex.'}
             $stderrDrainTask = $process.StandardError.BaseStream.CopyToAsync([System.IO.Stream]::Null)
             $script:CodexConnection=[pscustomobject]@{Process=$process;Stderr=$stderrDrainTask;NextId=1}
             $initialize=@{method='initialize';id=0;params=@{clientInfo=@{name='usage-tray-pill';version='0.3.0'}}}|ConvertTo-Json -Depth 5 -Compress
@@ -5872,7 +5873,6 @@ if ($RefreshLiveOnce) {
 }
 
 if ($RefreshAntigravityOnce) {
-    . (Join-Path $PSScriptRoot "ExternalUsageAdapters.ps1")
     $ok = Update-AntigravityCliUsage
     $usage = Get-AntigravityUsageSnapshot
     Write-Host "Antigravity refresh: $ok"

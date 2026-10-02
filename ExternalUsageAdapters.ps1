@@ -20,6 +20,26 @@ function ConvertTo-UtpNativeArgument {
     '"' + ([regex]::Replace([regex]::Replace($Value, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1')) + '"'
 }
 
+function Start-UtpUsageProcess {
+    param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
+    # .NET Framework creates an auto-flushing stdin writer during Start().
+    # Suppress its UTF-8 BOM without changing the console codepage. All JSONL
+    # provider starts share this lock, including starts that need no override.
+    [System.Threading.Monitor]::Enter([System.Diagnostics.Process])
+    $changedEncoding = $false
+    try {
+        $inputEncoding = [Console]::InputEncoding
+        if ($inputEncoding.CodePage -eq 65001 -and $inputEncoding.GetPreamble().Length -gt 0) {
+            [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+            $changedEncoding = $true
+        }
+        return $Process.Start()
+    } finally {
+        try { if ($changedEncoding) { [Console]::InputEncoding = $inputEncoding } }
+        finally { [System.Threading.Monitor]::Exit([System.Diagnostics.Process]) }
+    }
+}
+
 function Invoke-UtpExternalUsageCommand {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
@@ -47,7 +67,7 @@ function Invoke-UtpExternalUsageCommand {
     $usageComplete = $false
     $lineOffset = 0
     try {
-        if (-not $process.Start()) { throw 'process_failed' }
+        if (-not (Start-UtpUsageProcess -Process $process)) { throw 'process_failed' }
         if ($ClaudeUsageControl) {
             $process.StandardInput.WriteLine('{"type":"control_request","request_id":"utp-init","request":{"subtype":"initialize","hooks":{},"sdkMcpServers":[]}}')
             $process.StandardInput.Flush()

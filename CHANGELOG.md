@@ -35,6 +35,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Keep JSON control handshakes free of UTF-8 byte-order marks on Windows hosts whose default console writer emits them.
+
 - Render pill text with the native Windows text engine and create provider icons at their final physical size, retaining smooth alpha edges.
 - Accept Claude's valid null reset time for unused quota windows; retain all Antigravity buckets in Details and show the restrictive window per family in the pill.
 

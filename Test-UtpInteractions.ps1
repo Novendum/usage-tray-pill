@@ -73,7 +73,12 @@ try {
     $workerPath=Join-Path $testRoot 'worker.ps1'
     $workerCode=@'
 param([string]$OutputPath)
-Start-Sleep -Milliseconds 600
+$release=Join-Path $PSScriptRoot 'release-worker'
+$deadline=(Get-Date).AddSeconds(15)
+while (-not (Test-Path -LiteralPath $release)) {
+    if ((Get-Date) -ge $deadline) { throw 'Synthetic worker release timed out' }
+    Start-Sleep -Milliseconds 20
+}
 @{source='codex-app-server';lastCheckedAt=(Get-Date).ToString('o');lastError='';buckets=@()} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $OutputPath
 '@
     [IO.File]::WriteAllText($workerPath,$workerCode)
@@ -98,6 +103,7 @@ Start-Sleep -Milliseconds 600
     while ($script:ProviderRefreshes.Count -gt 0 -and $watch.ElapsedMilliseconds -lt 8000) {
         [Windows.Forms.Application]::DoEvents()
         $ticks++
+        if ($ticks -eq 6) { [IO.File]::WriteAllText((Join-Path $testRoot 'release-worker'),'ready') }
         Update-ProviderRefreshProcessState
         Start-Sleep -Milliseconds 20
     }

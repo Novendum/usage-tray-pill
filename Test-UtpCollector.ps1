@@ -50,6 +50,21 @@ while($null -ne ($line=[Console]::ReadLine())) {
     [IO.File]::WriteAllText((Join-Path $root 'mock.ps1'),$mock)
     [IO.File]::WriteAllText((Join-Path $root 'codex.cmd'),"@echo off`r`n`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`" -NoProfile -ExecutionPolicy Bypass -File `"%~dp0mock.ps1`"`r`n")
     $env:PATH="$root;$oldPath"
+    # Exercise the main script's one-shot path without relying on collector imports.
+    $originalResolver=${function:Resolve-CodexCommandPath}
+    $originalInputEncoding=[Console]::InputEncoding
+    $script:FakeCodexPath=Join-Path $root 'codex.cmd'
+    try {
+        function Resolve-CodexCommandPath { return $script:FakeCodexPath }
+        [Console]::InputEncoding=New-Object System.Text.UTF8Encoding $true
+        $single=Invoke-CodexRateLimitsRead
+        Check ($single.rateLimits.primary.usedPercent -eq 99.6) 'One-shot Codex JSONL must work with a BOM-bearing host console'
+    } finally {
+        Close-CodexConnection
+        [Console]::InputEncoding=$originalInputEncoding
+        ${function:Resolve-CodexCommandPath}=$originalResolver
+    }
+    Remove-Item -LiteralPath (Join-Path $root 'reads.txt')
     $exe=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $ownerTicks=(Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks
     $collector=Join-Path $PSScriptRoot 'Start-UsageCollector.ps1'

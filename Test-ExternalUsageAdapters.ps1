@@ -76,9 +76,17 @@ if ($second.type -ne 'control_request' -or $second.request.subtype -ne 'get_usag
 [Console]::WriteLine('{"type":"control_response","response":{"request_id":"utp-usage","subtype":"success","response":{"session":{"total_cost_usd":0,"model_usage":{}},"rate_limits_available":false,"rate_limits":null,"behaviors":null}}}')
 Start-Sleep -Seconds 5
 '@
-$control = Invoke-UtpExternalUsageCommand -FilePath $powershell -Arguments @('-NoProfile','-Command',$controlFixture) -ClaudeUsageControl
-$controlData = $control.Output | ConvertFrom-Json
-Assert-ExternalTest ($control.ExitCode -eq 0 -and $controlData.rate_limits_available -eq $false) 'Control protocol must initialize, request usage with transcript scan disabled, then stop its owned process.'
+$originalInputEncoding = [Console]::InputEncoding
+try {
+    foreach ($withBom in @($false,$true)) {
+        # Windows CI can use a UTF-8 console encoding whose default writer emits a BOM.
+        [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $withBom
+        $control = Invoke-UtpExternalUsageCommand -FilePath $powershell -Arguments @('-NoProfile','-Command',$controlFixture) -ClaudeUsageControl
+        $controlData = $control.Output | ConvertFrom-Json
+        Assert-ExternalTest ($control.ExitCode -eq 0 -and $controlData.rate_limits_available -eq $false) 'Control protocol must use BOM-free JSON regardless of the host console encoding.'
+        Assert-ExternalTest (([Console]::InputEncoding.GetPreamble().Length -gt 0) -eq $withBom) 'Starting the child must restore the host input encoding.'
+    }
+} finally { [Console]::InputEncoding = $originalInputEncoding }
 $activityFixture = '[Console]::WriteLine(''{"type":"assistant","message":{}}''); Start-Sleep -Seconds 5'
 Assert-ExternalRejected { Invoke-UtpExternalUsageCommand -FilePath $powershell -Arguments @('-NoProfile','-Command',$activityFixture) -ClaudeUsageControl } 'Unexpected model activity must stop the owned process.'
 
