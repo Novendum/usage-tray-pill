@@ -22,6 +22,8 @@ Claude documents 5-hour and 7-day usage fields in its statusline. UTP may also r
 
 Preferences also offers **Use Claude CLI quotas (experimental)**. This remains off by default. It uses an isolated, zero-user-message `get_usage` control request with transcript-behavior scanning disabled. Sign in to Claude Code with your subscription first. The selected source uses its own cache and does not silently fall back. Local validation on 2026-10-02 confirmed quota reads with Claude Code 2.1.286 after sign-in, with no model activity; the upstream API remains experimental.
 
+The CLI quota source starts its own isolated helper and does not require Claude Desktop to remain open. An unverifiable quota response is retried after 30 seconds with exponential backoff capped at 15 minutes. Authentication/setup failures and unexpected model or transcript activity remain paused. Invalid responses never become displayed percentages.
+
 ### Antigravity
 
 `ExternalUsageAdapters.ps1` invokes an installed Antigravity CLI with `-p /usage --output-format json`. Its strict parser follows an observed output contract, not a Google-published JSON schema. Missing CLI installation produces `setup_required`; unsupported responses remain unavailable. Local validation on 2026-10-02 confirmed the four Gemini/third-party quota windows with signed-in CLI 1.2.14 and zero model turns. The pill shows the restrictive window per family; Details retains all windows. UTP does not install dependencies automatically, inspect language-server CSRF values, or use the former loopback quota service.

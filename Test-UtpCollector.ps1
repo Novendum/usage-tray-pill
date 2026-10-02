@@ -1,4 +1,5 @@
-$ErrorActionPreference='Stop'
+﻿$ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'Test-ProcessHelpers.ps1')
 . (Join-Path $PSScriptRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
 function Check {param([bool]$Value,[string]$Message) if(-not $Value){throw $Message}}
 Check ((Format-RemainingPercent 0.4) -eq '<1%') 'Fractional allowance must not be displayed as exhausted'
@@ -68,11 +69,11 @@ while($null -ne ($line=[Console]::ReadLine())) {
     $exe=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $ownerTicks=(Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks
     $collector=Join-Path $PSScriptRoot 'Start-UsageCollector.ps1'
-    $process=Start-Process -FilePath $exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$collector+'"'),'-OwnerProcessId',$PID,'-OwnerStartTicks',$ownerTicks,'-DataDirectory',('"'+$root+'"'),'-Sources','codex') -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $root 'stderr.txt')
+    $process=Start-UtpHiddenTestProcess -FilePath $exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$collector+'"'),'-OwnerProcessId',$PID,'-OwnerStartTicks',$ownerTicks,'-DataDirectory',('"'+$root+'"'),'-Sources','codex')
     $cache=Join-Path $root 'codex-usage.json'
     $deadline=(Get-Date).AddSeconds(20)
     while(-not (Test-Path $cache) -and -not $process.HasExited -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 100}
-    if(-not (Test-Path $cache)){throw ('Collector did not produce a snapshot: '+(Get-Content (Join-Path $root 'stderr.txt') -Raw))}
+    if(-not (Test-Path $cache)){throw ('Collector did not produce a snapshot: '+$(if($process.UtpTestError.IsCompleted){$process.UtpTestError.Result}else{'collector did not finish'}))}
     $snapshot=Get-Content $cache -Raw|ConvertFrom-Json
     Check ([Math]::Abs($snapshot.buckets[0].primaryRemainingPercent-0.4) -lt 0.001) 'Collector must preserve provider precision'
     Check ($monitor.ConsumeChanges()) 'Atomic provider writes must wake the UI watcher'
@@ -88,7 +89,7 @@ while($null -ne ($line=[Console]::ReadLine())) {
     $script:State.settings.autoPollLiveUsage=$false
     Save-State
     $readCount=@(Get-Content (Join-Path $root 'reads.txt')).Count
-    $process=Start-Process -FilePath $exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$collector+'"'),'-OwnerProcessId',$PID,'-OwnerStartTicks',$ownerTicks,'-DataDirectory',('"'+$root+'"'),'-Sources','codex') -WindowStyle Hidden -PassThru
+    $process=Start-UtpHiddenTestProcess -FilePath $exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$collector+'"'),'-OwnerProcessId',$PID,'-OwnerStartTicks',$ownerTicks,'-DataDirectory',('"'+$root+'"'),'-Sources','codex')
     Start-Sleep -Seconds 2
     Check (@(Get-Content (Join-Path $root 'reads.txt')).Count -eq $readCount) 'Restart must not replay an already consumed refresh when automatic polling is disabled'
     Stop-OwnedRefreshProcess $process;$process=$null

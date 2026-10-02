@@ -1,6 +1,6 @@
 function Get-ProviderRetrySeconds {
     param([string]$ErrorCode,[int]$FailureCount,[int]$RetryAfterSeconds=0)
-    if ($ErrorCode -in @('auth_expired','auth_required','unsupported_auth_context','unsupported_response','unexpected_model_activity','access_denied','subscription_required','api_key_required','credential_unreadable','setup_required')) { return -1 }
+    if ($ErrorCode -in @('auth_expired','auth_required','unsupported_auth_context','unsupported_response','unexpected_model_activity','unexpected_transcript_activity','access_denied','subscription_required','api_key_required','credential_unreadable','setup_required')) { return -1 }
     if ($RetryAfterSeconds -gt 0) { return [Math]::Min(86400,[Math]::Max(30,$RetryAfterSeconds)) }
     return [int][Math]::Min(900,30*[Math]::Pow(2,[Math]::Min(5,[Math]::Max(0,$FailureCount-1))))
 }

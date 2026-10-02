@@ -4,7 +4,19 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
-## [Unreleased]
+## [0.1.0-rc.3] - 2026-10-02
+
+### Fixed
+
+- Retry unverifiable Claude CLI quota responses with bounded backoff instead of leaving collection permanently paused. Claude Desktop does not need to remain open for the CLI source.
+- Keep authentication/setup failures and unexpected model or transcript activity paused; never display unverified values.
+- Start background test helpers without creating console windows, removing a possible source of PowerShell flashes during testing.
+
+### Verification
+
+- Regression fixtures cover malformed-response recovery, retry bounds and unsafe-activity pauses. Existing UTF-8 handshake regressions remain intact.
+
+## [0.1.0-rc.2] - 2026-10-02
 
 ### Added
 
