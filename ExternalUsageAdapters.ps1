@@ -248,9 +248,11 @@ function ConvertFrom-UtpClaudeControlUsageJson {
     param([Parameter(Mandatory = $true)][string]$Json)
     if ([System.Text.Encoding]::UTF8.GetByteCount($Json) -gt 1048576) { throw 'response_too_large' }
     $payload = $Json | ConvertFrom-Json -ErrorAction Stop
-    if ($payload -isnot [pscustomobject] -or $payload.rate_limits_available -isnot [bool] -or
-        $null -ne $payload.behaviors -or $null -eq $payload.session.total_cost_usd -or
-        $payload.session.total_cost_usd -ne 0 -or @($payload.session.model_usage.PSObject.Properties).Count -gt 0) { throw 'unsupported_response' }
+    if ($payload -isnot [pscustomobject]) { throw 'unsupported_response' }
+    if (($null -ne $payload.session.total_cost_usd -and $payload.session.total_cost_usd -ne 0) -or
+        ($null -ne $payload.session.model_usage -and @($payload.session.model_usage.PSObject.Properties).Count -gt 0)) { throw 'unexpected_model_activity' }
+    if ($null -ne $payload.behaviors) { throw 'unexpected_transcript_activity' }
+    if ($payload.rate_limits_available -isnot [bool] -or $null -eq $payload.session.total_cost_usd) { throw 'unsupported_response' }
     if (-not $payload.rate_limits_available) {
         return New-UtpExternalUsageFailure 'claude-code-control' 'unsupported_auth_context' 'This isolated Claude CLI session does not expose plan limits. The account context is not verified.'
     }
@@ -294,7 +296,7 @@ function Get-UtpClaudeControlUsage {
         $result = Invoke-UtpExternalUsageCommand -FilePath $path -Arguments @('-p','--input-format','stream-json','--output-format','stream-json','--verbose','--no-session-persistence','--safe-mode','--setting-sources','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--tools','') -ClaudeUsageControl
         ConvertFrom-UtpClaudeControlUsageJson -Json $result.Output
     } catch {
-        $code = if ($_.Exception.Message -in @('timeout','response_too_large','auth_required','unexpected_model_activity','interaction_required','initialization_failed','usage_request_failed','missing_usage_response')) { $_.Exception.Message } else { 'unsupported_response' }
+        $code = if ($_.Exception.Message -in @('timeout','response_too_large','auth_required','unexpected_model_activity','unexpected_transcript_activity','interaction_required','initialization_failed','usage_request_failed','missing_usage_response')) { $_.Exception.Message } else { 'usage_response_unavailable' }
         New-UtpExternalUsageFailure 'claude-code-control' $code 'The experimental Claude usage diagnostic did not provide verified plan limits.'
     }
 }

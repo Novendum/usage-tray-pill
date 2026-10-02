@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $adapter = Join-Path $PSScriptRoot 'ExternalUsageAdapters.ps1'
 if (-not (Test-Path -LiteralPath $adapter)) { throw 'External usage adapter is missing.' }
 . $adapter
+. (Join-Path $PSScriptRoot 'CollectorPolicy.ps1')
 
 function Assert-ExternalTest([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
@@ -59,6 +60,40 @@ Assert-ExternalTest ($noContext.errorCode -eq 'unsupported_auth_context' -and -n
 Assert-ExternalRejected { ConvertFrom-UtpClaudeControlUsageJson -Json ($claudeFixture.Replace('12.345','101')) } 'Invalid Claude utilization must be rejected.'
 Assert-ExternalRejected { ConvertFrom-UtpClaudeControlUsageJson -Json ($claudeFixture.Replace('"behaviors":null','"behaviors":{}')) } 'Unexpected transcript scan output must be rejected.'
 Assert-ExternalRejected { ConvertFrom-UtpClaudeControlUsageJson -Json ($claudeFixture.Replace('"total_cost_usd":0','"total_cost_usd":0.001')) } 'Unexpected Claude session costs must be rejected.'
+
+# A malformed Claude quota response can recover; unsafe activity must stay paused.
+$originalClaudeResolver=${function:Resolve-UtpClaudeUsageCli}
+$originalCommandRunner=${function:Invoke-UtpExternalUsageCommand}
+try {
+    function Resolve-UtpClaudeUsageCli { return 'synthetic-cli.exe' }
+    function Invoke-UtpExternalUsageCommand {
+        param($FilePath,$Arguments,$MaximumBytes,[switch]$ClaudeUsageControl)
+        if ($Arguments[0] -eq '--version') { return [pscustomobject]@{ExitCode=0;Output='2.1.286'} }
+        return [pscustomobject]@{ExitCode=0;Output=$script:RecoveryReply}
+    }
+    $script:RecoveryReply='{}'
+    $failed=Get-UtpClaudeControlUsage
+    Assert-ExternalTest ($failed.errorCode -eq 'usage_response_unavailable') 'An unverifiable Claude response must have a recoverable classification.'
+    Assert-ExternalTest ((Get-ProviderRetrySeconds $failed.errorCode 1) -eq 30) 'Retry a temporary Claude response failure after 30 seconds.'
+    Assert-ExternalTest ((Get-ProviderRetrySeconds $failed.errorCode 20) -eq 900) 'Repeated failures must remain bounded to one attempt per 15 minutes.'
+    $script:RecoveryReply=$claudeFixture
+    Assert-ExternalTest ((Get-UtpClaudeControlUsage).available) 'A later verified response must recover without restarting Claude Desktop.'
+    $script:RecoveryReply=$claudeFixture.Replace('"total_cost_usd":0','"total_cost_usd":0.001')
+    $unsafe=Get-UtpClaudeControlUsage
+    Assert-ExternalTest ($unsafe.errorCode -eq 'unexpected_model_activity' -and (Get-ProviderRetrySeconds $unsafe.errorCode 1) -eq -1) 'Unexpected model activity must never be retried.'
+    $script:RecoveryReply=$claudeFixture.Replace('"behaviors":null','"behaviors":{}')
+    $unsafe=Get-UtpClaudeControlUsage
+    Assert-ExternalTest ($unsafe.errorCode -eq 'unexpected_transcript_activity' -and (Get-ProviderRetrySeconds $unsafe.errorCode 1) -eq -1) 'Unexpected transcript diagnostics must never be retried.'
+    $script:RecoveryReply='{"session":{"total_cost_usd":0.001,"model_usage":{}},"behaviors":{}}'
+    $unsafe=Get-UtpClaudeControlUsage
+    Assert-ExternalTest ($unsafe.errorCode -eq 'unexpected_model_activity' -and (Get-ProviderRetrySeconds $unsafe.errorCode 1) -eq -1) 'Observed model activity must remain paused even when response fields are missing.'
+    $script:RecoveryReply='{"behaviors":{}}'
+    $unsafe=Get-UtpClaudeControlUsage
+    Assert-ExternalTest ($unsafe.errorCode -eq 'unexpected_transcript_activity' -and (Get-ProviderRetrySeconds $unsafe.errorCode 1) -eq -1) 'Observed transcript activity must remain paused even when session data is missing.'
+} finally {
+    ${function:Resolve-UtpClaudeUsageCli}=$originalClaudeResolver
+    ${function:Invoke-UtpExternalUsageCommand}=$originalCommandRunner
+}
 
 # Child processes below are local synthetic PowerShell fixtures, never providers.
 $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'

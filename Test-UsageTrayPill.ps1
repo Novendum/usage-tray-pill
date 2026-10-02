@@ -1,4 +1,5 @@
 ﻿$ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "Test-ProcessHelpers.ps1")
 
 $scriptPath = Join-Path $PSScriptRoot "Start-UsageTrayPill.ps1"
 $usageUpdaterPath = Join-Path $PSScriptRoot "Update-ClaudeUsageFromStatusline.ps1"
@@ -435,14 +436,14 @@ function Stop-ProcessTree {
 
 $selfTestTimeoutMilliseconds = 30000
 
-$process = Start-Process -FilePath $windowsPowerShellPath -ArgumentList @(
+$process = Start-UtpHiddenTestProcess -FilePath $windowsPowerShellPath -ArgumentList @(
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
     "-File",
     ("`"" + $scriptPath + "`""),
     "-SelfTest"
-) -PassThru
+)
 
 if (-not $process.WaitForExit($selfTestTimeoutMilliseconds)) {
     Stop-ProcessTree -RootProcessId $process.Id
@@ -473,14 +474,14 @@ try {
     }
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "assets") -Destination $relocatedRoot -Recurse
 
-    $relocatedProcess = Start-Process -FilePath $windowsPowerShellPath -ArgumentList @(
+    $relocatedProcess = Start-UtpHiddenTestProcess -FilePath $windowsPowerShellPath -ArgumentList @(
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
         "-File",
         ("`"" + (Join-Path $relocatedRoot "Start-UsageTrayPill.ps1") + "`""),
         "-SelfTest"
-    ) -PassThru
+    )
 
     if (-not $relocatedProcess.WaitForExit($selfTestTimeoutMilliseconds)) {
         Stop-ProcessTree -RootProcessId $relocatedProcess.Id
