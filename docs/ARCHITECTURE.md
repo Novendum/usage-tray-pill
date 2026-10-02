@@ -2,9 +2,21 @@
 
 ## Runtime
 
-`Start-UsageTrayPill.ps1` owns the WinForms tray icon, taskbar pill, local state, provider polling, fullscreen detection, and shutdown lifecycle.
+`Start-UsageTrayPill.ps1` owns the WinForms tray icon, taskbar pill, settings, cache consumption, fullscreen detection, and shutdown lifecycle. `Start-UsageCollector.ps1` owns background quota collection.
 
 `Launch-UsageTrayPill.vbs` starts the main script without a visible console window. The CMD launcher delegates to this file.
+
+`PillRenderer.cs` owns the pill's layered WinForms window and premultiplied-alpha bitmap presentation through `UpdateLayeredWindow`. Capsule curves, labels, and icons are composited onto the same surface. Offscreen controls retain layout metadata; the visible pill has no opaque child windows or binary window region. Native bitmap and device-context handles are released after each frame. Alpha coverage and idle-logo placement are tested at 100%, 125%, 150%, 175%, and 200% scaling.
+
+One hidden collector process hosts persistent, separate PowerShell runspaces for Codex, optional Claude CLI control, Antigravity, OpenCode Go, and Qwen. Codex retains its stdio app-server connection between requests. Successful collection schedules the next request after 60 seconds, or 120 seconds for Qwen. Disabled sources do not poll. `CollectorPolicy.ps1` pauses on authentication, setup, and entitlement failures; other failures back off exponentially from 30 to 900 seconds or honor a bounded `Retry-After` value. Explicit refresh and credential changes can resume a paused source. Manual request tokens and per-source consumption markers prevent replay after collector restart.
+
+`UsageFileMonitor.cs` watches UTP usage caches and Claude Desktop history. Managed callbacks flag changes; the UI consumes them on its 500 ms tick. Claude statusline writes therefore appear without waiting for a network polling interval. Provider-side reporting delays remain outside UTP's control.
+
+`RequestDeadline.cs` bounds each HTTP request to 15 seconds, including slow stream reads; socket and read timeouts remain 12 seconds. External CLI commands have a 30-second maximum plus a separate version check. The UI's 45-second manual-refresh watchdog may stop its owned collector if a refresh stalls. Workers write normalized usage snapshots, not settings.
+
+Provider clicks queue the latest selection while a 220 ms transition finishes. Animation uses a monotonic clock, follows the Windows menu-animation preference, and defers saving the selection until the transition completes. Right-click offers Refresh now. Hover tooltips are disabled; the root accessibility name remains available. Tab actions are positioned from the actual page size, and background refresh preserves selected rows.
+
+The live overview renders five native provider rows from the same normalized snapshots used by the pill. Remaining-allowance meters are empty for unknown or disabled data. Details retains the full table, while Preferences contains account-connection and local configuration actions with scrolling at the minimum outer window size. The visual direction is recorded in `DESIGN.md`.
 
 Tray and pill rendering is state-diff driven. The periodic timer detects fullscreen and geometry changes, but it does not recreate the notification icon, redraw unchanged quota content, or reassert topmost z-order. This keeps the Windows notification-area overflow and context menu stable while UTP is running.
 
@@ -12,30 +24,32 @@ Windows Explorer can move its own topmost taskbar window above the pill after ta
 
 ## Provider inputs
 
-ChatGPT/Codex usage is read from a locally started Codex app-server process. Claude 5-hour and weekly values are accepted through Claude Code's statusline payload and may fall back to Claude Desktop's local history cache. Antigravity quota values are read from the loopback-only language server owned by the running Antigravity process. Optional OpenCode Go values are read from the signed-in workspace dashboard by `OpenCodeGo.ps1`. Optional Qwen Token Plan values are read from the signed-in QwenCloud dashboard session by `QwenTokenPlan.ps1`.
+ChatGPT/Codex usage uses `account/rateLimits/read` over the persistent local `codex app-server --stdio` connection. All returned limit buckets remain distinct; `codexLimitId` stores the selected bucket. Percentages remain floating-point values, and positive values below one percent display as `<1%` rather than zero.
 
-Claude usage is accepted only from Claude Code's statusline payload or Claude Desktop's local usage history. UTP does not read Claude credentials or call a Claude usage endpoint itself.
+Claude's default source remains its Code statusline payload, with Desktop usage history as a fallback. The optional isolated CLI diagnostic in `ExternalUsageAdapters.ps1` initializes a control session and sends `get_usage` with `skip_behaviors`, without a user prompt or model request. Unsupported account context and unexpected model activity fail closed. The initial signed-out probe returned `unsupported_auth_context`; signed-in CLI 2.1.286 subsequently returned verified quota windows with no model activity. The source is explicitly enabled in Preferences. UTP does not read Claude credentials.
 
-The Antigravity adapter validates the language-server executable shape, Antigravity-specific command arguments, process-owned loopback ports, and the exact local status endpoint. It normalizes model rows into at most three conservative family groups and discards all account fields before caching. Its temporary CSRF value remains memory-only. No Antigravity cloud fallback is implemented.
+Antigravity uses an installed CLI's `-p /usage --output-format json` command through `ExternalUsageAdapters.ps1`. The invocation is based on the [provider changelog](https://antigravity.google/docs/changelog/); the JSON contract is observed in [SigNoz's integration](https://signoz.io/docs/antigravity-cli-monitoring/) and [Heddle's usage-tap notes](https://github.com/mmayasaurus/heddle-dashboard/blob/main/docs/USAGE_TAP.md), not a published Google schema. The parser validates fields strictly and normalizes model groups conservatively. Missing CLI installation produces `setup_required`. CLI 1.2.14 was validated locally on 2026-10-02 with four quota windows and zero model turns. The old language-server loopback and CSRF path has been removed.
 
-The OpenCode Go adapter is disabled until the user explicitly configures it. It accepts a workspace ID or dashboard URL and a dashboard `auth` cookie, encrypts the cookie with current-user Windows DPAPI, and sends it only to the matching HTTPS dashboard route. It parses 5-hour, weekly, and monthly windows from the embedded dashboard state. Network, server, parser, and rate-limit failures may retain a last-known snapshot for up to six hours; missing or expired authentication clears displayed values. UTP never discovers this credential from OpenCode or browser-owned files.
+`OpenCodeGo.ps1` uses the [official `GET /zen/go/v1/usage` endpoint](https://github.com/anomalyco/opencode/blob/dev/packages/console/app/src/routes/zen/go/v1/usage.ts) with an explicitly supplied Bearer key. It maps `usage.rolling`, `weekly`, and `monthly` to the existing normalized windows while preserving fractional percentages, status, and absolute resets. HTTP 401 maps to `auth_expired`, 403 to `subscription_required`, and 429 retains a bounded retry delay. Transient failures may retain cached values for up to six hours; authentication and entitlement failures hide them.
 
-The dashboard compatibility approach was independently implemented after comparing the public MIT-licensed `agent-limits`, `opencode-quota`, and `opencode-bar` projects. They are compatibility references, not runtime dependencies:
-
-- <https://docs.rs/crate/agent-limits/latest>
-- <https://github.com/slkiser/opencode-quota>
-- <https://github.com/opgginc/opencode-bar>
+OpenCode credentials use version 2 of UTP's current-user DPAPI file. `OPENCODE_GO_API_KEY` takes precedence. Legacy version-1 cookie records yield `api_key_required` without decryption or modification; only an explicit save replaces the record. Disable preserves credentials and cache. No external key discovery is implemented.
 
 The Qwen adapter is disabled until the user explicitly supplies a Cookie request-header value from the signed-in QwenCloud dashboard. It encrypts that value with current-user Windows DPAPI and uses it only for the exact `home.qwencloud.com` identity route and `cs-data.qwencloud.com` Token Plan gateway. Redirects are disabled, response size and time are bounded, and the fixed parser accepts only fractional consumed values for the 5-hour and weekly windows. UTP does not inspect Qwen CLI configuration, API keys, or browser-owned cookie storage.
 
-OpenCode Go, Qwen, and Antigravity enforce their response-size limits while reading the network stream. This prevents an oversized or malformed response from being fully allocated before rejection.
+The Preferences checkbox changes Qwen collection state while preserving its encrypted session and cache. Newer Personal-plan variants and the separate QwenCloud CLI require an account-specific compatibility check before changing the adapter; Coding Plan, Personal Token Plan, Team Token Plan, and Qwen Code OAuth are not interchangeable.
+
+OpenCode Go and Qwen enforce response-size limits while reading the network stream. External CLI stdout and stderr are also bounded. No dependency installation is performed automatically.
 
 ## Local state
 
-UTP owns `%APPDATA%\UsageTrayPill`. Provider-owned credential and cache files are external read-only inputs. `opencode-go-credentials.json` and `qwen-token-plan-credentials.json` are UTP-owned and contain only the required identifiers plus DPAPI ciphertext.
+UTP owns `%APPDATA%\UsageTrayPill`. Provider-owned usage caches are external read-only inputs; provider credential stores are not read. `opencode-go-credentials.json` and `qwen-token-plan-credentials.json` are UTP-owned and contain DPAPI ciphertext plus format metadata.
+
+Loading settings never writes or resets `data.json`. Invalid or unreadable settings stop startup with the original file intact. Codex workers write `codex-usage.json`; the UI imports only usage data, so a worker cannot overwrite settings or reset notes. Codex snapshots expire after 15 minutes and individual windows expire at their reset time. A missing percentage stays unknown, and window labels follow their actual duration. Claude observations are not made newer by payloads without quota data. OpenCode and Qwen retained snapshots are marked as cached after five minutes, rendered in a neutral color, and unavailable after six hours or expired authentication; reset windows are cleared independently.
 
 ## Process ownership
 
 The main tray process may start a Claude keeper helper when explicitly enabled. Shutdown matches that helper by script path and command line before stopping it. Runtime cleanup is exception-safe and disposes all owned timers, windows, icons, mutex handles, and helper processes. Unrelated PowerShell, Claude, ChatGPT, database, and development processes are outside UTP's ownership boundary.
 
 The security assumptions behind these boundaries are maintained in [THREAT_MODEL.md](THREAT_MODEL.md).
+
+The pill text uses native GDI rendering on opaque temporary surfaces and copies glyph colors only into fully opaque capsule pixels; antialiased alpha edges remain unchanged. Icons are generated at final physical dimensions. The optional Claude CLI source uses `claude-control-usage.json`, remains disabled by default, and is selected explicitly in Preferences. Local signed-in checks on 2026-10-02 validated Claude Code 2.1.286 and Antigravity CLI 1.2.14 without model turns.

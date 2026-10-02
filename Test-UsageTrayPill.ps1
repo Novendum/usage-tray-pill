@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $scriptPath = Join-Path $PSScriptRoot "Start-UsageTrayPill.ps1"
 $usageUpdaterPath = Join-Path $PSScriptRoot "Update-ClaudeUsageFromStatusline.ps1"
@@ -168,10 +168,7 @@ $usageUpdater = Get-Content -LiteralPath $usageUpdaterPath -Raw
 $openCodeAdapter = Get-Content -LiteralPath $openCodeAdapterPath -Raw
 $qwenAdapter = Get-Content -LiteralPath $qwenAdapterPath -Raw
 $gitIgnore = Get-Content -LiteralPath (Join-Path $PSScriptRoot ".gitignore") -Raw
-if ($openCodeAdapter -notmatch 'reads usage from the OpenCode Go dashboard' -or
-    $openCodeAdapter -notmatch 'session is encrypted for your Windows account only') {
-    throw "OpenCode Go setup must describe its experimental dashboard source and encrypted session storage."
-}
+if ($openCodeAdapter -notmatch '/zen/go/v1/usage' -or $openCodeAdapter -notmatch 'API key') { throw 'OpenCode must describe the API key usage route.' }
 if ($qwenAdapter -notmatch 'reads usage from QwenCloud dashboard interfaces every two minutes' -or
     $qwenAdapter -notmatch 'session is encrypted for your Windows account only') {
     throw "Qwen setup must describe its experimental dashboard source, poll interval, and encrypted session storage."
@@ -207,17 +204,9 @@ if ($trayScript -notmatch 'Get-ClaudeIconCandidatePaths' -or
     $trayScript -notmatch 'Get-CodexIconPath') {
     throw "ChatGPT and Claude indicators must be loaded from locally installed apps."
 }
-if ($trayScript -notmatch 'Get-AntigravityLanguageServerContext' -or
-    $trayScript -notmatch 'LanguageServerService/GetUserStatus' -or
-    $trayScript -notmatch 'Get-TaskbarBadgeSources') {
-    throw "The tray must include the local Antigravity adapter and dynamic provider cycle."
-}
-if ($trayScript -notmatch 'Read-AntigravityLimitedUtf8Stream' -or
-    $trayScript -match '(?s)Invoke-AntigravityUserStatusRequest.+?ReadToEnd\(') {
-    throw "Antigravity responses must be strictly bounded while reading."
-}
-if ($trayScript -match 'fetchAvailableModels|oauth2\.googleapis\.com') {
-    throw "The Antigravity integration must not include a cloud or OAuth fallback."
+$externalAdapter=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'ExternalUsageAdapters.ps1') -Raw
+if ($externalAdapter -notmatch 'Update-AntigravityCliUsage' -or $trayScript -match 'LanguageServerService/GetUserStatus') {
+    throw 'Antigravity must use the CLI adapter without an internal loopback fallback.'
 }
 if ($trayScript -match 'Fable 5|function Update-ClaudeUsage|RefreshFromOAuth') {
     throw "The tray must not contain Fable or experimental Claude OAuth logic."
@@ -255,9 +244,7 @@ if ($trayScript -notmatch 'StandardError\.BaseStream\.CopyToAsync\(\[System\.IO\
     $trayScript -notmatch 'WaitForExit\(2000\)') {
     throw "Codex app-server stderr must be drained without unbounded memory growth and shut down cleanly."
 }
-if ($trayScript -notmatch 'if \(\$widthChanged -or \$null -eq \$script:BadgeForm\.Region\)') {
-    throw "Dynamic badge width must also refresh the rounded window region."
-}
+if ($trayScript -match '\$script:BadgeForm\.Region\s*=') { throw 'A binary window region must not clip the alpha-blended pill.' }
 
 $openCodeGoAdapterPath = Join-Path $PSScriptRoot "OpenCodeGo.ps1"
 if (-not (Test-Path -LiteralPath $openCodeGoAdapterPath)) {
@@ -269,9 +256,9 @@ if ($trayScript -notmatch 'RefreshOpenCodeGoOnce' -or
     $trayScript -notmatch 'Show-OpenCodeGoSetupDialog') {
     throw "The tray must offer OpenCode Go as a configurable fourth provider."
 }
-if ($openCodeGoAdapter -notmatch 'rollingUsage' -or
-    $openCodeGoAdapter -notmatch 'weeklyUsage' -or
-    $openCodeGoAdapter -notmatch 'monthlyUsage') {
+if ($openCodeGoAdapter -notmatch 'rolling' -or
+    $openCodeGoAdapter -notmatch 'weekly' -or
+    $openCodeGoAdapter -notmatch 'monthly') {
     throw "The OpenCode Go adapter must process 5-hour, weekly, and monthly quotas."
 }
 if ($openCodeGoAdapter -notmatch 'ProtectedData.*Protect' -or
@@ -326,17 +313,7 @@ if ($qwenAdapter -notmatch 'Read-QwenLimitedUtf8Stream' -or $qwenAdapter -match 
 }
 
 $keeperScript = Get-Content -LiteralPath $keeperPath -Raw
-if ($keeperScript -notmatch 'Get-ChildItem -LiteralPath \$desktopRoot -Directory') {
-    throw "The Claude keeper must discover Desktop version directories dynamically."
-}
-if ($keeperScript -notmatch 'Sort-Object Version -Descending') {
-    throw "The Claude keeper must select the newest valid Desktop version."
-}
-if ($keeperScript -notmatch 'CommandType Application' -or
-    $keeperScript -notmatch '\$extension -in @\("\.exe", "\.cmd", "\.bat"\)' -or
-    $keeperScript -notmatch 'Test-Path -LiteralPath \$resolvedPath -PathType Leaf') {
-    throw "The Claude keeper may only start an existing executable Claude file, not an alias or function."
-}
+if ($keeperScript -notmatch 'Resolve-UtpClaudeUsageCli') { throw 'Keeper must share the version-aware native Claude resolver.' }
 if ($trayScript -match 'return "5h \$primary\s+weekly \$secondary"') {
     throw "The status badge must no longer show a 5h value."
 }
@@ -373,9 +350,7 @@ if ($trayScript -notmatch '\$logoViewport\.Visible = \$true' -or $trayScript -no
 if ($trayScript -notmatch 'function Enable-ControlDoubleBuffering') {
     throw "The status badge must use double buffering to prevent flicker during animations."
 }
-if ($trayScript -notmatch '\$script:BadgeForm\.Invalidate\(\$true\)' -or $trayScript -notmatch '\$script:BadgeForm\.Update\(\)') {
-    throw "The status badge must refresh all child controls during the transition without leaving trails."
-}
+if ($trayScript -notmatch 'Present-TaskbarBadge') { throw 'Animation frames must be presented through the alpha renderer.' }
 if ($trayScript -notmatch 'if \(\$script:BadgeAnimating\) \{\s*\$rect = \$script:BadgeForm\.Bounds') {
     throw "Keep-alive must not overwrite the animated badge width during a transition."
 }
@@ -489,6 +464,10 @@ try {
         "Update-ClaudeUsageFromStatusline.ps1",
         "OpenCodeGo.ps1",
         "QwenTokenPlan.ps1"
+        "PillRenderer.cs"
+        "ExternalUsageAdapters.ps1"
+        "CollectorPolicy.ps1"
+        "RequestDeadline.cs"
     )) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $runtimeFile) -Destination $relocatedRoot
     }
@@ -520,3 +499,9 @@ $usageOutput = & $windowsPowerShellPath -NoProfile -ExecutionPolicy Bypass -File
 if ($LASTEXITCODE -ne 0 -or ($usageOutput -notcontains "Selftest OK")) {
     throw "Claude usage updater selftest failed."
 }
+
+foreach ($regressionScript in @('Test-UtpReliability.ps1', 'Test-UtpInteractions.ps1', 'Test-UtpPillRendering.ps1', 'Test-OpenCodeGoApi.ps1', 'Test-ExternalUsageAdapters.ps1', 'Test-UtpCollector.ps1')) {
+    & $windowsPowerShellPath -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $regressionScript)
+    if ($LASTEXITCODE -ne 0) { throw "$regressionScript failed." }
+}
+Write-Output 'All UTP tests OK'

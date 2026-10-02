@@ -1,4 +1,4 @@
-$script:QwenDashboardOrigin = "https://home.qwencloud.com"
+﻿$script:QwenDashboardOrigin = "https://home.qwencloud.com"
 $script:QwenGatewayOrigin = "https://cs-data.qwencloud.com"
 $script:QwenSnapshotMaxAgeHours = 6
 
@@ -283,6 +283,9 @@ function Invoke-QwenJsonRequest {
         $request.Headers["Origin"] = $script:QwenDashboardOrigin
     }
 
+    $response = $null
+    $deadline=New-Object UtpRequestDeadline $request,15000
+    try {
     if ($Method -eq "POST") {
         $request.ContentType = "application/x-www-form-urlencoded; charset=UTF-8"
         $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($FormBody)
@@ -295,8 +298,6 @@ function Invoke-QwenJsonRequest {
         }
     }
 
-    $response = $null
-    try {
         $response = [System.Net.HttpWebResponse]$request.GetResponse()
         $statusCode = [int]$response.StatusCode
         if ($statusCode -ge 300 -and $statusCode -lt 400) {
@@ -319,12 +320,16 @@ function Invoke-QwenJsonRequest {
         $webResponse = $_.Exception.Response
         if ($null -ne $webResponse) {
             $statusCode = [int]$webResponse.StatusCode
+            $retryAfter=Get-HttpRetryAfterSeconds ([string]$webResponse.Headers['Retry-After'])
             $webResponse.Dispose()
-            if ($statusCode -in @(401, 403)) {
+            if ($statusCode -eq 401) {
                 throw (New-QwenException -Code "auth_expired" -Message "The QwenCloud session has expired.")
             }
+            if ($statusCode -eq 403) { throw (New-QwenException -Code 'access_denied' -Message 'QwenCloud denied access. Check the account and subscription.') }
             if ($statusCode -eq 429) {
-                throw (New-QwenException -Code "rate_limited" -Message "QwenCloud asks you to try again later.")
+                $failure=New-QwenException -Code "rate_limited" -Message "QwenCloud asks you to try again later."
+                $failure.Data['RetryAfterSeconds']=$retryAfter
+                throw $failure
             }
             if ($statusCode -ge 500) {
                 throw (New-QwenException -Code "server_error" -Message "QwenCloud is temporarily unavailable.")
@@ -334,6 +339,7 @@ function Invoke-QwenJsonRequest {
     }
     finally {
         if ($null -ne $response) { $response.Dispose() }
+        $deadline.Dispose()
         $request.Abort()
     }
 }
@@ -475,7 +481,7 @@ function ConvertFrom-QwenUsageResponse {
         if ($null -eq $fraction) { continue }
 
         $usedPercent = [Math]::Min(100.0, [Math]::Max(0.0, $fraction * 100.0))
-        $remainingPercent = [int][Math]::Round(100.0 - $usedPercent, 0, [MidpointRounding]::AwayFromZero)
+        $remainingPercent = 100.0 - $usedPercent
         $items += [pscustomobject]@{
             key = $definition.Key
             label = $definition.Label
@@ -511,9 +517,14 @@ function Get-QwenUsageSnapshot {
 
     $copy = $usage | ConvertTo-Json -Depth 8 | ConvertFrom-Json
     $lastSuccess = Get-DateOrNull ([string]$copy.lastSuccessAt)
-    if ($null -eq $lastSuccess -or ((Get-Date) - $lastSuccess).TotalHours -gt $script:QwenSnapshotMaxAgeHours) {
+    if ($null -eq $lastSuccess -or $lastSuccess -gt (Get-Date).AddMinutes(1) -or ((Get-Date) - $lastSuccess).TotalHours -gt $script:QwenSnapshotMaxAgeHours) {
         $copy.available = $false
         foreach ($item in @($copy.items)) { $item.remainingPercent = $null }
+    }
+    if ($null -ne $lastSuccess -and ((Get-Date) - $lastSuccess).TotalMinutes -gt 5) { $copy.stale = $true }
+    foreach ($item in @($copy.items)) {
+        $reset = Get-DateOrNull ([string]$item.resetsAt)
+        if ($null -ne $reset -and $reset -le (Get-Date)) { $item.remainingPercent = $null }
     }
     return $copy
 }
@@ -521,7 +532,8 @@ function Get-QwenUsageSnapshot {
 function Set-QwenFailureSnapshot {
     param(
         [Parameter(Mandatory = $true)] [string]$Code,
-        [Parameter(Mandatory = $true)] [string]$Message
+        [Parameter(Mandatory = $true)] [string]$Message,
+        [int]$RetryAfterSeconds = 0
     )
 
     $previous = Read-QwenUsageSnapshotRaw
@@ -545,6 +557,7 @@ function Set-QwenFailureSnapshot {
         lastSuccessAt = $lastSuccessAt
         lastError = $Code
         lastErrorMessage = $Message
+        retryAfterSeconds = $RetryAfterSeconds
         items = @($items)
     })
 }
@@ -597,7 +610,7 @@ function Update-QwenUsage {
         } else {
             "Qwen Token Plan could not be refreshed."
         }
-        Set-QwenFailureSnapshot -Code $code -Message $message
+        Set-QwenFailureSnapshot -Code $code -Message $message -RetryAfterSeconds ([int]$_.Exception.Data['RetryAfterSeconds'])
         return $false
     }
     finally {
@@ -677,8 +690,8 @@ function Show-QwenSetupDialog {
     $removeButton.Text = "Disable"
     $removeButton.Enabled = ($null -ne $existing -or [bool]$script:State.settings.qwenTokenPlanEnabled)
     $removeButton.Add_Click({
-        Remove-QwenCredentials
-        Remove-Item -LiteralPath $script:QwenUsagePath -Force -ErrorAction SilentlyContinue
+        Stop-QwenUsageRefresh
+        # Pausing Qwen preserves the encrypted connection for a later re-enable.
         $script:State.settings.qwenTokenPlanEnabled = $false
         if ([string]$script:State.settings.taskbarBadgeDefaultSource -eq "qwen") {
             $script:State.settings.taskbarBadgeDefaultSource = "codex"

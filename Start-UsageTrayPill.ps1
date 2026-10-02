@@ -1,11 +1,12 @@
-param(
+﻿param(
     [switch]$Validate,
     [switch]$RefreshLiveOnce,
     [switch]$RefreshAntigravityOnce,
     [switch]$RefreshOpenCodeGoOnce,
     [switch]$RefreshQwenOnce,
     [switch]$OpenEditor,
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    [switch]$LibraryOnly
 )
 
 Add-Type @"
@@ -135,13 +136,19 @@ if (-not $dpiConfigured) {
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -Path (Join-Path $PSScriptRoot 'RequestDeadline.cs')
+if (-not ($RefreshLiveOnce -or $RefreshAntigravityOnce -or $RefreshOpenCodeGoOnce -or $RefreshQwenOnce)) {
+    Add-Type -Path (Join-Path $PSScriptRoot 'PillRenderer.cs') -ReferencedAssemblies System.Windows.Forms,System.Drawing
+}
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:AppName = "Usage Tray Pill"
 $script:DataDir = Join-Path $env:APPDATA "UsageTrayPill"
 $script:DataPath = Join-Path $script:DataDir "data.json"
+$script:CodexUsagePath = Join-Path $script:DataDir "codex-usage.json"
 $script:ClaudeUsagePath = Join-Path $script:DataDir "claude-usage.json"
+$script:ClaudeControlUsagePath = Join-Path $script:DataDir "claude-control-usage.json"
 $script:AntigravityUsagePath = Join-Path $script:DataDir "antigravity-usage.json"
 $script:OpenCodeGoUsagePath = Join-Path $script:DataDir "opencode-go-usage.json"
 $script:OpenCodeGoCredentialPath = Join-Path $script:DataDir "opencode-go-credentials.json"
@@ -165,6 +172,15 @@ $script:OpenCodeGoRefreshProcess = $null
 $script:QwenUsagePollInProgress = $false
 $script:QwenRefreshProcess = $null
 $script:QwenRefreshIntervalMilliseconds = 120000
+$script:ProviderRefreshes = @{}
+$script:ProviderRefreshErrors = @{}
+$script:CollectorProcess = $null
+$script:CollectorRestartAt = [datetime]::MinValue
+$script:UsageMonitor = $null
+$script:CodexConnection = $null
+$script:BadgeToolTip = $null
+$script:BadgeTheme = 'Light'
+$script:PendingStateSave = $false
 $script:RefreshMainWindow = $null
 $script:BadgeForm = $null
 $script:BadgeLogoViewport = $null
@@ -195,7 +211,8 @@ $script:BadgeAnimationTimer = $null
 $script:BadgeAnimationStartedAt = $null
 $script:BadgeAnimationTargetSource = ""
 $script:BadgeAnimationHalfUpdated = $false
-$script:BadgeAnimationDurationMs = 340
+$script:BadgeAnimationDurationMs = 220
+$script:BadgePendingSource = ""
 $script:BadgeAnimationStartWidth = 0
 $script:BadgeAnimationTargetWidth = 0
 $script:BadgeLabelFontSize = 12
@@ -352,13 +369,16 @@ function New-DefaultState {
             liveUsagePollIntervalMinutes = 5
             showTaskbarBadge = $true
             taskbarBadgeDefaultSource = "codex"
+            codexLimitId = "codex"
             keepClaudeCodeAlive = $false
+            claudeControlEnabled = $false
             openCodeGoEnabled = $false
             qwenTokenPlanEnabled = $false
         }
         liveUsage = [pscustomobject]@{
             source = "codex-app-server"
             lastCheckedAt = ""
+            lastSuccessAt = ""
             lastError = ""
             planType = ""
             resetCreditsAvailable = $null
@@ -424,6 +444,8 @@ function Normalize-State {
     Ensure-Property -Target $State.settings -Name "liveUsagePollIntervalMinutes" -Value 5
     Ensure-Property -Target $State.settings -Name "showTaskbarBadge" -Value $true
     Ensure-Property -Target $State.settings -Name "taskbarBadgeDefaultSource" -Value "codex"
+    Ensure-Property -Target $State.settings -Name "codexLimitId" -Value "codex"
+    Ensure-Property -Target $State.settings -Name "claudeControlEnabled" -Value $false
     Ensure-Property -Target $State.settings -Name "keepClaudeCodeAlive" -Value $false
     Ensure-Property -Target $State.settings -Name "openCodeGoEnabled" -Value $false
     Ensure-Property -Target $State.settings -Name "qwenTokenPlanEnabled" -Value $false
@@ -454,6 +476,7 @@ function Normalize-State {
     }
     Ensure-Property -Target $State.liveUsage -Name "source" -Value "codex-app-server"
     Ensure-Property -Target $State.liveUsage -Name "lastCheckedAt" -Value ""
+    Ensure-Property -Target $State.liveUsage -Name "lastSuccessAt" -Value ""
     Ensure-Property -Target $State.liveUsage -Name "lastError" -Value ""
     Ensure-Property -Target $State.liveUsage -Name "planType" -Value ""
     Ensure-Property -Target $State.liveUsage -Name "resetCreditsAvailable" -Value $null
@@ -549,7 +572,6 @@ function Load-State {
     if (-not (Test-Path -LiteralPath $script:DataPath)) {
         $state = New-DefaultState
         $script:State = Normalize-State $state
-        Save-State
         return $script:State
     }
 
@@ -557,15 +579,11 @@ function Load-State {
         $raw = Get-Content -LiteralPath $script:DataPath -Raw -ErrorAction Stop
         $state = $raw | ConvertFrom-Json -ErrorAction Stop
         $script:State = Normalize-State $state
-        Save-State
         return $script:State
     }
     catch {
-        $backupPath = "$($script:DataPath).broken-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-        Copy-Item -LiteralPath $script:DataPath -Destination $backupPath -Force -ErrorAction SilentlyContinue
-        $script:State = Normalize-State (New-DefaultState)
-        Save-State
-        return $script:State
+        # A read or validation failure must never overwrite the user's data.
+        throw "UTP could not read its saved settings. The original file was preserved."
     }
 }
 
@@ -665,6 +683,8 @@ function Format-TimeLeft {
 
 . (Join-Path $PSScriptRoot "OpenCodeGo.ps1")
 . (Join-Path $PSScriptRoot "QwenTokenPlan.ps1")
+. (Join-Path $PSScriptRoot "CollectorPolicy.ps1")
+. (Join-Path $PSScriptRoot "ExternalUsageAdapters.ps1")
 
 function Get-ResetStatus {
     param($Reset)
@@ -1022,8 +1042,8 @@ function Get-JsonLineResponse {
         }
 
         $line = $task.Result
-        $task = $Process.StandardOutput.ReadLineAsync()
         if ([string]::IsNullOrWhiteSpace($line)) {
+            $task = $Process.StandardOutput.ReadLineAsync()
             continue
         }
 
@@ -1034,8 +1054,8 @@ function Get-JsonLineResponse {
             }
         }
         catch {
-            continue
         }
+        $task = $Process.StandardOutput.ReadLineAsync()
     }
 
     throw "No app-server response for request ID $ExpectedId within $TimeoutSeconds seconds."
@@ -1087,7 +1107,7 @@ function New-CodexAppServerStartInfo {
         throw "Unsupported Codex command type: $extension"
     }
 
-    $psi.WorkingDirectory = $PSScriptRoot
+    $psi.WorkingDirectory = $(if ($script:CollectorRepo) { $script:CollectorRepo } else { $PSScriptRoot })
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
@@ -1097,63 +1117,45 @@ function New-CodexAppServerStartInfo {
     return $psi
 }
 
+function Close-CodexConnection {
+    if ($null -eq $script:CodexConnection) { return }
+    $connection=$script:CodexConnection
+    $script:CodexConnection=$null
+    try { if(-not $connection.Process.HasExited){$connection.Process.StandardInput.Close();[void]$connection.Process.WaitForExit(200)} } catch {}
+    Stop-OwnedRefreshProcess -Process $connection.Process
+    try { [void]$connection.Stderr.Wait(500) } catch {}
+}
+
 function Invoke-CodexRateLimitsRead {
-    $codexPath = Resolve-CodexCommandPath
-    $psi = New-CodexAppServerStartInfo -CodexPath $codexPath
-
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = $psi
-
-    if (-not $process.Start()) {
-        throw "Could not start the Codex app-server."
-    }
-
-    $stderrDrainTask = $process.StandardError.BaseStream.CopyToAsync([System.IO.Stream]::Null)
     try {
-        $initialize = @{
-            method = "initialize"
-            id = 0
-            params = @{
-                clientInfo = @{
-                    name = "usage-tray-pill"
-                    version = "0.2.0"
-                }
-            }
-        } | ConvertTo-Json -Depth 6 -Compress
-
-        $rateLimits = @{
-            method = "account/rateLimits/read"
-            id = 1
-        } | ConvertTo-Json -Depth 4 -Compress
-
-        $process.StandardInput.WriteLine($initialize)
-        $process.StandardInput.WriteLine($rateLimits)
+        if ($null -eq $script:CodexConnection -or $script:CodexConnection.Process.HasExited) {
+            Close-CodexConnection
+            $process=New-Object System.Diagnostics.Process
+            $process.StartInfo=New-CodexAppServerStartInfo -CodexPath (Resolve-CodexCommandPath)
+            if(-not (Start-UtpUsageProcess -Process $process)){throw 'Could not start Codex.'}
+            $stderrDrainTask = $process.StandardError.BaseStream.CopyToAsync([System.IO.Stream]::Null)
+            $script:CodexConnection=[pscustomobject]@{Process=$process;Stderr=$stderrDrainTask;NextId=1}
+            $initialize=@{method='initialize';id=0;params=@{clientInfo=@{name='usage-tray-pill';version='0.3.0'}}}|ConvertTo-Json -Depth 5 -Compress
+            $process.StandardInput.WriteLine($initialize)
+            $process.StandardInput.Flush()
+            $reply=Get-JsonLineResponse -Process $process -ExpectedId 0 -TimeoutSeconds 15
+            if($null -ne $reply.error){throw 'Codex initialization failed.'}
+            $process.StandardInput.WriteLine('{"method":"initialized"}')
+        }
+        $process=$script:CodexConnection.Process
+        $id=$script:CodexConnection.NextId++
+        $process.StandardInput.WriteLine((@{method='account/rateLimits/read';id=$id}|ConvertTo-Json -Compress))
         $process.StandardInput.Flush()
-
-        [void](Get-JsonLineResponse -Process $process -ExpectedId 0 -TimeoutSeconds 15)
-        $response = Get-JsonLineResponse -Process $process -ExpectedId 1 -TimeoutSeconds 20
-
-        if ($response.PSObject.Properties.Name -contains "error" -and $null -ne $response.error) {
-            throw [string]$response.error.message
+        $response=Get-JsonLineResponse -Process $process -ExpectedId $id -TimeoutSeconds 20
+        if($null -ne $response.error){
+            $usageFailure=New-Object InvalidOperationException 'Codex could not provide usage. Check your Codex sign-in.'
+            $usageFailure.Data['UtpCode']=if([string]$response.error.message -match '(?i)auth|sign.in|log.in'){'auth_expired'}else{'network_error'}
+            throw $usageFailure
         }
-
+        if($null -eq $response.result){throw 'Codex returned no usage.'}
         return $response.result
-    }
-    finally {
-        try {
-            if (-not $process.HasExited) {
-                $process.Kill()
-            }
-            [void]$process.WaitForExit(2000)
-        }
-        catch {
-        }
-        if ($null -ne $stderrDrainTask) {
-            try { [void]$stderrDrainTask.Wait(500) } catch {
-            }
-        }
-        $process.Dispose()
-    }
+    } catch { Close-CodexConnection; throw }
+    finally { if(-not $script:CollectorMode){Close-CodexConnection} }
 }
 
 function Convert-LiveBucket {
@@ -1166,21 +1168,83 @@ function Convert-LiveBucket {
     $primary = $Bucket.primary
     $secondary = $Bucket.secondary
     $credits = $Bucket.credits
+    $primaryUsed = Get-ValidUsagePercent $primary.usedPercent
+    $secondaryUsed = Get-ValidUsagePercent $secondary.usedPercent
 
     return [pscustomobject]@{
         limitId = [string]$Bucket.limitId
         limitName = [string]$Bucket.limitName
         planType = [string]$Bucket.planType
-        primaryUsedPercent = $(if ($null -ne $primary) { [int][Math]::Round([double]$primary.usedPercent) } else { $null })
-        primaryRemainingPercent = $(if ($null -ne $primary) { [int][Math]::Max(0, 100 - [double]$primary.usedPercent) } else { $null })
+        primaryUsedPercent = $(if ($null -ne $primaryUsed) { $primaryUsed } else { $null })
+        primaryRemainingPercent = $(if ($null -ne $primaryUsed) { (100 - $primaryUsed) } else { $null })
         primaryWindowDurationMins = $(if ($null -ne $primary) { $primary.windowDurationMins } else { $null })
         primaryResetsAt = $(if ($null -ne $primary) { Format-UnixDateForStorage $primary.resetsAt } else { "" })
-        secondaryUsedPercent = $(if ($null -ne $secondary) { [int][Math]::Round([double]$secondary.usedPercent) } else { $null })
-        secondaryRemainingPercent = $(if ($null -ne $secondary) { [int][Math]::Max(0, 100 - [double]$secondary.usedPercent) } else { $null })
+        secondaryUsedPercent = $(if ($null -ne $secondaryUsed) { $secondaryUsed } else { $null })
+        secondaryRemainingPercent = $(if ($null -ne $secondaryUsed) { (100 - $secondaryUsed) } else { $null })
         secondaryWindowDurationMins = $(if ($null -ne $secondary) { $secondary.windowDurationMins } else { $null })
         secondaryResetsAt = $(if ($null -ne $secondary) { Format-UnixDateForStorage $secondary.resetsAt } else { "" })
         creditsBalance = $(if ($null -ne $credits -and $credits.PSObject.Properties.Name -contains "balance") { [string]$credits.balance } else { "" })
         rateLimitReachedType = [string]$Bucket.rateLimitReachedType
+    }
+}
+
+function Get-ValidUsagePercent {
+    param($Value)
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
+    try {
+        $number = [double]$Value
+        if ([double]::IsNaN($number) -or [double]::IsInfinity($number) -or $number -lt 0 -or $number -gt 100) { return $null }
+        return $number
+    } catch { return $null }
+}
+
+function Format-RemainingPercent {
+    param($Value)
+    $number=Get-ValidUsagePercent $Value
+    if($null -eq $number){return '--'}
+    if($number -gt 0 -and $number -lt 1){return '<1%'}
+    return ('{0}%' -f [int][Math]::Floor($number))
+}
+
+function Set-QwenEnabled {
+    param([bool]$Enabled)
+    $script:State.settings.qwenTokenPlanEnabled=$Enabled
+    if(-not $Enabled -and $script:State.settings.taskbarBadgeDefaultSource -eq 'qwen'){$script:State.settings.taskbarBadgeDefaultSource='codex'}
+    Save-State
+    if(-not $Enabled){Stop-QwenUsageRefresh}else{Start-QwenUsageRefresh}
+    Refresh-Tray
+    if($null -ne $script:RefreshMainWindow){& $script:RefreshMainWindow}
+}
+
+function Update-CodexBucketChoices {
+    $box=$script:MainWindowControls.CodexBucket
+    if($null -eq $box){return}
+    $buckets=@($script:State.liveUsage.buckets)
+    $signature=($buckets|ForEach-Object{"$($_.limitId):$($_.limitName)"}) -join '|'
+    if($box.Tag -eq $signature){return}
+    $box.Tag=$signature;$box.Items.Clear()
+    foreach($bucket in $buckets){
+        $name=if([string]::IsNullOrWhiteSpace($bucket.limitName)){$bucket.limitId}else{$bucket.limitName}
+        $entry=[pscustomobject]@{Id=$bucket.limitId;Label=$name}
+        [void]$box.Items.Add($entry)
+        if($bucket.limitId -eq $script:State.settings.codexLimitId){$box.SelectedItem=$entry}
+    }
+}
+
+function Get-LiveUsageBuckets {
+    $usage = $script:State.liveUsage
+    $checked = Get-DateOrNull ([string]$usage.lastCheckedAt)
+    $fresh = $null -ne $checked -and ((Get-Date) - $checked).TotalMinutes -le 15 -and $checked -le (Get-Date).AddMinutes(1) -and [string]::IsNullOrWhiteSpace([string]$usage.lastError)
+    foreach ($bucket in @(As-Array $usage.buckets)) {
+        $copy = $bucket | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        foreach ($window in @('primary','secondary')) {
+            Ensure-Property -Target $copy -Name "${window}RemainingPercent" -Value $null
+            $reset = Get-DateOrNull ([string]$copy.("${window}ResetsAt"))
+            if (-not $fresh -or ($null -ne $reset -and $reset -le (Get-Date))) {
+                $copy.("${window}RemainingPercent") = $null
+            }
+        }
+        $copy
     }
 }
 
@@ -1223,17 +1287,18 @@ function Update-LiveUsage {
         $script:State.liveUsage.source = "codex-app-server"
         $script:State.liveUsage.lastCheckedAt = Format-DateForStorage (Get-Date)
         $script:State.liveUsage.lastError = ""
+        $script:State.liveUsage.lastSuccessAt = Format-DateForStorage (Get-Date)
         $script:State.liveUsage.resetCreditsAvailable = $resetCredits
         $script:State.liveUsage.buckets = @($buckets)
         $script:State.liveUsage.planType = $(if ($null -ne $mainBucket) { [string]$mainBucket.planType } else { "" })
         $script:State.liveUsage.creditsBalance = $(if ($null -ne $mainBucket) { [string]$mainBucket.creditsBalance } else { "" })
-        Save-State
+        Write-OpenCodeGoJsonAtomically -Path $script:CodexUsagePath -Value $script:State.liveUsage -MutexName 'UsageTrayPillCodexUsageWrite'
         return $true
     }
     catch {
         $script:State.liveUsage.lastCheckedAt = Format-DateForStorage (Get-Date)
-        $script:State.liveUsage.lastError = $_.Exception.Message
-        Save-State
+        $script:State.liveUsage.lastError = $(if($_.Exception.Data['UtpCode']){[string]$_.Exception.Data['UtpCode']}else{'network_error'})
+        Write-OpenCodeGoJsonAtomically -Path $script:CodexUsagePath -Value $script:State.liveUsage -MutexName 'UsageTrayPillCodexUsageWrite'
         return $false
     }
     finally {
@@ -1246,43 +1311,31 @@ function Get-MainLiveBucket {
         return $null
     }
 
-    $buckets = @(As-Array $script:State.liveUsage.buckets)
-    $bucket = $buckets | Where-Object { $_.limitId -eq "codex" } | Select-Object -First 1
+    $buckets = @(Get-LiveUsageBuckets)
+    $selected = [string]$script:State.settings.codexLimitId
+    if ([string]::IsNullOrWhiteSpace($selected)) { $selected='codex' }
+    $bucket = $buckets | Where-Object { $_.limitId -eq $selected } | Select-Object -First 1
     if ($null -ne $bucket) {
         return $bucket
-    }
-
-    if ($buckets.Count -gt 0) {
-        return $buckets[0]
     }
 
     return $null
 }
 
+function Get-LiveBucketWindow {
+    param([object]$Bucket, [int]$Minutes)
+    if ($null -eq $Bucket) { return $null }
+    foreach ($window in @('primary','secondary')) {
+        if ($Bucket.("${window}WindowDurationMins") -eq $Minutes) {
+            return [pscustomobject]@{remainingPercent=$Bucket.("${window}RemainingPercent");resetsAt=$Bucket.("${window}ResetsAt")}
+        }
+    }
+    return $null
+}
+
 function Get-WeeklyBucketRemainingPercent {
     param([object]$Bucket = (Get-MainLiveBucket))
-
-    if ($null -eq $Bucket) {
-        return $null
-    }
-
-    $weeklyWindowMinutes = 7 * 24 * 60
-    if ($null -ne $Bucket.primaryWindowDurationMins -and [double]$Bucket.primaryWindowDurationMins -ge $weeklyWindowMinutes -and $null -ne $Bucket.primaryRemainingPercent) {
-        return $Bucket.primaryRemainingPercent
-    }
-    if ($null -ne $Bucket.secondaryWindowDurationMins -and [double]$Bucket.secondaryWindowDurationMins -ge $weeklyWindowMinutes -and $null -ne $Bucket.secondaryRemainingPercent) {
-        return $Bucket.secondaryRemainingPercent
-    }
-
-    # Older snapshots may not contain window durations. Prefer the only populated window.
-    if ($null -eq $Bucket.primaryRemainingPercent -and $null -ne $Bucket.secondaryRemainingPercent) {
-        return $Bucket.secondaryRemainingPercent
-    }
-    if ($null -ne $Bucket.primaryRemainingPercent -and $null -eq $Bucket.secondaryRemainingPercent) {
-        return $Bucket.primaryRemainingPercent
-    }
-
-    return $null
+    return (Get-LiveBucketWindow -Bucket $Bucket -Minutes 10080).remainingPercent
 }
 
 function Get-EffectiveResetCount {
@@ -1313,7 +1366,7 @@ function Test-ClaudeUsageSnapshotFresh {
         $maxAgeMinutes = 15
     }
 
-    if (((Get-Date) - $lastChecked).TotalMinutes -gt $maxAgeMinutes) {
+    if ($lastChecked -gt (Get-Date).AddMinutes(1) -or ((Get-Date) - $lastChecked).TotalMinutes -gt $maxAgeMinutes) {
         return $false
     }
 
@@ -1357,13 +1410,15 @@ function Convert-ClaudeDesktopUsageHistory {
     )) {
         $sample = $samples | Where-Object { $_.u.PSObject.Properties.Name -contains $definition.Key -and ([DateTimeOffset]::FromUnixTimeMilliseconds([int64]$_.t).LocalDateTime -ge $checkedAt.AddMinutes(-20)) } | Select-Object -Last 1
         if ($null -eq $sample) { continue }
-        $used = [int][Math]::Max(0, [Math]::Min(100, [Math]::Round([double]$sample.u.($definition.Key))))
+        $used = Get-ValidUsagePercent $sample.u.($definition.Key)
+        if($null -eq $used){continue}
         $limits += [pscustomobject]@{
             key = $definition.SourceKey
             label = $definition.Label
             usedPercent = $used
             remainingPercent = 100 - $used
             resetsAt = ""
+            observedAt = Format-DateForStorage ([DateTimeOffset]::FromUnixTimeMilliseconds([int64]$sample.t).LocalDateTime)
         }
     }
 
@@ -1402,7 +1457,15 @@ function Get-ClaudeDesktopUsageSnapshot {
 
 function Get-ClaudeUsageSnapshot {
     $usage = $null
-    if (Test-Path -LiteralPath $script:ClaudeUsagePath) {
+    if([bool]$script:State.settings.claudeControlEnabled){
+        try {
+            $control=Get-Content -LiteralPath $script:ClaudeControlUsagePath -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
+            $five=@($control.items)|Where-Object key -eq 'five_hour'|Select-Object -First 1
+            $week=@($control.items)|Where-Object key -eq 'seven_day'|Select-Object -First 1
+            $usage=[pscustomobject]@{source='claude-code-control';lastCheckedAt=$control.lastCheckedAt;lastError=$control.lastError;lastSuccessAt=$control.lastSuccessAt;fiveHourRemainingPercent=$five.remainingPercent;fiveHourResetsAt=$five.resetsAt;sevenDayRemainingPercent=$week.remainingPercent;sevenDayResetsAt=$week.resetsAt;limits=@($control.items);modelName='';version=''}
+        }catch{return $null}
+    }
+    elseif (Test-Path -LiteralPath $script:ClaudeUsagePath) {
         try {
             $raw = Get-Content -LiteralPath $script:ClaudeUsagePath -Raw -ErrorAction Stop
             if (-not [string]::IsNullOrWhiteSpace($raw)) { $usage = $raw | ConvertFrom-Json -ErrorAction Stop }
@@ -1410,19 +1473,29 @@ function Get-ClaudeUsageSnapshot {
         catch { $usage = $null }
     }
 
-    if (Test-ClaudeUsageNeedsDesktopFallback $usage) {
+    if (-not [bool]$script:State.settings.claudeControlEnabled -and (Test-ClaudeUsageNeedsDesktopFallback $usage)) {
         $desktopUsage = Get-ClaudeDesktopUsageSnapshot
         if ($null -ne $desktopUsage) { $usage = $desktopUsage }
     }
 
     if ($null -eq $usage) { return $null }
     try {
+        $checked = Get-DateOrNull ([string]$usage.lastCheckedAt)
+        if ($null -eq $checked -or $checked -gt (Get-Date).AddMinutes(1) -or ((Get-Date) - $checked).TotalMinutes -gt 15 -or -not [string]::IsNullOrWhiteSpace([string]$usage.lastError)) {
+            $usage.fiveHourRemainingPercent = $null
+            $usage.sevenDayRemainingPercent = $null
+            foreach ($limit in @($usage.limits)) { $limit.remainingPercent = $null }
+        }
         $now = Get-Date
         if ($null -ne (Get-DateOrNull ([string]$usage.fiveHourResetsAt)) -and (Get-DateOrNull ([string]$usage.fiveHourResetsAt)) -lt $now) { $usage.fiveHourRemainingPercent = $null }
         if ($null -ne (Get-DateOrNull ([string]$usage.sevenDayResetsAt)) -and (Get-DateOrNull ([string]$usage.sevenDayResetsAt)) -lt $now) { $usage.sevenDayRemainingPercent = $null }
         foreach ($limit in @($usage.limits)) {
             $reset = Get-DateOrNull ([string]$limit.resetsAt)
             if ($null -ne $reset -and $reset -lt $now) { $limit.remainingPercent = $null }
+            $observed = Get-DateOrNull ([string]$limit.observedAt)
+            if ($null -ne $observed -and ($observed -gt $now.AddMinutes(1) -or ($now - $observed).TotalMinutes -gt 15)) { $limit.remainingPercent = $null }
+            if ($limit.key -eq 'five_hour') { $usage.fiveHourRemainingPercent = $limit.remainingPercent }
+            if ($limit.key -eq 'seven_day') { $usage.sevenDayRemainingPercent = $limit.remainingPercent }
         }
         return $usage
     }
@@ -1441,169 +1514,6 @@ function Get-ClaudeUsageSnapshot {
     }
 }
 
-function Get-AntigravityLanguageServerContext {
-    $processes = @(Get-CimInstance Win32_Process -Filter "Name='language_server.exe'" -ErrorAction SilentlyContinue)
-    foreach ($process in $processes) {
-        $executablePath = [string]$process.ExecutablePath
-        $commandLine = [string]$process.CommandLine
-        if ([string]::IsNullOrWhiteSpace($executablePath) -or
-            $executablePath -notmatch '(?i)\\antigravity\\resources\\bin\\language_server\.exe$' -or
-            $commandLine -notmatch '(?i)(?:^|\s)--override_ide_name\s+antigravity(?:\s|$)' -or
-            $commandLine -notmatch '(?i)(?:^|\s)--app_data_dir\s+antigravity(?:\s|$)') {
-            continue
-        }
-
-        $tokenMatch = [regex]::Match($commandLine, '(?i)(?:^|\s)--csrf_token(?:=|\s+)(?:"([^"]+)"|''([^'']+)''|([^\s]+))')
-        if (-not $tokenMatch.Success) { continue }
-        $csrfToken = @($tokenMatch.Groups[1].Value, $tokenMatch.Groups[2].Value, $tokenMatch.Groups[3].Value) |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-            Select-Object -First 1
-        if ([string]::IsNullOrWhiteSpace([string]$csrfToken)) { continue }
-
-        $ports = @()
-        try {
-            $ports = @(Get-NetTCPConnection -State Listen -OwningProcess ([int]$process.ProcessId) -ErrorAction Stop |
-                Where-Object { $_.LocalAddress -in @('127.0.0.1', '::1') } |
-                Select-Object -ExpandProperty LocalPort -Unique)
-        }
-        catch { $ports = @() }
-        if ($ports.Count -eq 0) { continue }
-
-        return [pscustomobject]@{
-            ProcessId = [int]$process.ProcessId
-            ExecutablePath = $executablePath
-            CsrfToken = [string]$csrfToken
-            Ports = @($ports)
-        }
-    }
-
-    return $null
-}
-
-function Read-AntigravityLimitedUtf8Stream {
-    param(
-        [Parameter(Mandatory = $true)] [System.IO.Stream]$Stream,
-        [int]$MaximumBytes = 2097152
-    )
-
-    $memory = New-Object System.IO.MemoryStream
-    $buffer = New-Object byte[] 8192
-    $totalBytes = 0
-    try {
-        while (($read = $Stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-            $totalBytes += $read
-            if ($totalBytes -gt $MaximumBytes) {
-                throw 'Antigravity returned an unexpectedly large response.'
-            }
-            $memory.Write($buffer, 0, $read)
-        }
-        return [System.Text.Encoding]::UTF8.GetString($memory.ToArray())
-    }
-    finally {
-        [Array]::Clear($buffer, 0, $buffer.Length)
-        $memory.Dispose()
-    }
-}
-
-function Invoke-AntigravityUserStatusRequest {
-    param(
-        [Parameter(Mandatory = $true)] [int]$Port,
-        [Parameter(Mandatory = $true)] [string]$CsrfToken
-    )
-
-    $uri = "https://127.0.0.1:$Port/exa.language_server_pb.LanguageServerService/GetUserStatus"
-    $request = [System.Net.HttpWebRequest]::Create($uri)
-    $request.Method = 'POST'
-    $request.ContentType = 'application/json'
-    $request.Accept = 'application/json'
-    $request.Timeout = 3500
-    $request.ReadWriteTimeout = 3500
-    $request.KeepAlive = $false
-    $request.Headers.Add('Connect-Protocol-Version', '1')
-    $request.Headers.Add('X-Codeium-Csrf-Token', $CsrfToken)
-    $request.ServerCertificateValidationCallback = { $true }
-    $body = [System.Text.Encoding]::UTF8.GetBytes('{"metadata":{"ideName":"antigravity"}}')
-    $request.ContentLength = $body.Length
-
-    $requestStream = $null
-    $response = $null
-    try {
-        $requestStream = $request.GetRequestStream()
-        $requestStream.Write($body, 0, $body.Length)
-        $requestStream.Dispose()
-        $requestStream = $null
-        $response = $request.GetResponse()
-        if ($response.ContentLength -gt 2097152) { throw 'Antigravity returned an unexpectedly large response.' }
-        $responseStream = $response.GetResponseStream()
-        try {
-            $json = Read-AntigravityLimitedUtf8Stream -Stream $responseStream -MaximumBytes 2097152
-        }
-        finally {
-            $responseStream.Dispose()
-        }
-        if ([string]::IsNullOrWhiteSpace($json)) { throw 'Antigravity returned an empty status response.' }
-        return $json | ConvertFrom-Json -ErrorAction Stop
-    }
-    finally {
-        if ($null -ne $response) { $response.Dispose() }
-        if ($null -ne $requestStream) { $requestStream.Dispose() }
-        $request.Abort()
-    }
-}
-
-function Convert-AntigravityStatusToUsage {
-    param([Parameter(Mandatory = $true)] [object]$StatusResponse)
-
-    $configs = @(As-Array $StatusResponse.userStatus.cascadeModelConfigData.clientModelConfigs)
-    $families = @{}
-    foreach ($config in $configs) {
-        if ($null -eq $config.quotaInfo -or $null -eq $config.quotaInfo.remainingFraction) { continue }
-        try {
-            $fraction = [double]$config.quotaInfo.remainingFraction
-        }
-        catch { continue }
-        $remainingPercent = [int][Math]::Round([Math]::Min(1.0, [Math]::Max(0.0, $fraction)) * 100, 0)
-        $modelLabel = [string]$config.label
-        $family = if ($modelLabel -match '(?i)\bgemini\b') { 'Gemini' } elseif ($modelLabel -match '(?i)\bclaude\b') { 'Claude' } elseif ($modelLabel -match '(?i)\bgpt(?:-|\b)') { 'GPT' } else { 'Other' }
-        $candidate = [pscustomobject]@{
-            label = $family
-            remainingPercent = $remainingPercent
-            resetsAt = [string]$config.quotaInfo.resetTime
-        }
-        if (-not $families.ContainsKey($family) -or $remainingPercent -lt [int]$families[$family].remainingPercent) {
-            $families[$family] = $candidate
-        }
-    }
-
-    if ($families.Count -eq 0) { throw 'Antigravity returned no usable quotas.' }
-
-    $items = @()
-    if ($families.ContainsKey('Gemini')) { $items += $families['Gemini'] }
-    if ($families.ContainsKey('Claude') -and $families.ContainsKey('GPT') -and
-        [int]$families['Claude'].remainingPercent -eq [int]$families['GPT'].remainingPercent -and
-        [string]$families['Claude'].resetsAt -eq [string]$families['GPT'].resetsAt) {
-        $items += [pscustomobject]@{
-            label = 'Other'
-            remainingPercent = [int]$families['Claude'].remainingPercent
-            resetsAt = [string]$families['Claude'].resetsAt
-        }
-    }
-    else {
-        if ($families.ContainsKey('Claude')) { $items += $families['Claude'] }
-        if ($families.ContainsKey('GPT')) { $items += $families['GPT'] }
-    }
-    if ($families.ContainsKey('Other') -and $items.Count -lt 3) { $items += $families['Other'] }
-    $items = @($items | Select-Object -First 3)
-
-    return [pscustomobject]@{
-        source = 'antigravity-language-server'
-        lastCheckedAt = Format-DateForStorage (Get-Date)
-        lastError = ''
-        available = $true
-        items = @($items)
-    }
-}
-
 function Write-AntigravityUsageSnapshot {
     param([Parameter(Mandatory = $true)] [object]$Usage)
 
@@ -1619,47 +1529,17 @@ function Write-AntigravityUsageSnapshot {
     }
 }
 
-function Update-AntigravityUsage {
-    if ($script:AntigravityUsagePollInProgress) { return $false }
-    $script:AntigravityUsagePollInProgress = $true
-    try {
-        $context = Get-AntigravityLanguageServerContext
-        if ($null -eq $context) { throw 'Antigravity is not running.' }
-
-        $lastError = $null
-        foreach ($port in @($context.Ports)) {
-            try {
-                $status = Invoke-AntigravityUserStatusRequest -Port ([int]$port) -CsrfToken $context.CsrfToken
-                $usage = Convert-AntigravityStatusToUsage -StatusResponse $status
-                Write-AntigravityUsageSnapshot -Usage $usage
-                return $true
-            }
-            catch { $lastError = $_ }
-        }
-        if ($null -ne $lastError) { throw 'The local Antigravity status is unreachable.' }
-        throw 'Antigravity has no local status port.'
-    }
-    catch {
-        Write-AntigravityUsageSnapshot -Usage ([pscustomobject]@{
-            source = 'antigravity-language-server'
-            lastCheckedAt = Format-DateForStorage (Get-Date)
-            lastError = $_.Exception.Message
-            available = $false
-            items = @()
-        })
-        return $false
-    }
-    finally {
-        $script:AntigravityUsagePollInProgress = $false
-    }
-}
-
 function Get-AntigravityUsageSnapshot {
     if (-not (Test-Path -LiteralPath $script:AntigravityUsagePath)) { return $null }
     try {
         $usage = Get-Content -LiteralPath $script:AntigravityUsagePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         if (-not [bool]$usage.available) { return $usage }
         $now = Get-Date
+        $checked = Get-DateOrNull ([string]$usage.lastCheckedAt)
+        if ($null -eq $checked -or $checked -gt $now.AddMinutes(1) -or ($now - $checked).TotalMinutes -gt 5) {
+            $usage.available = $false
+            foreach ($item in @($usage.items)) { $item.remainingPercent = $null }
+        }
         foreach ($item in @($usage.items)) {
             $reset = Get-DateOrNull ([string]$item.resetsAt)
             if ($null -ne $reset -and $reset -lt $now) { $item.remainingPercent = $null }
@@ -1704,11 +1584,13 @@ function Format-LiveUsageSummary {
     }
 
     $parts = @()
-    if ($null -ne $bucket.primaryRemainingPercent) {
-        $parts += "5h remaining $($bucket.primaryRemainingPercent)% reset $(Format-ShortDisplayDate $bucket.primaryResetsAt)"
+    $five = Get-LiveBucketWindow -Bucket $bucket -Minutes 300
+    $week = Get-LiveBucketWindow -Bucket $bucket -Minutes 10080
+    if ($null -ne $five.remainingPercent) {
+        $parts += "5h remaining $($five.remainingPercent)% reset $(Format-ShortDisplayDate $five.resetsAt)"
     }
-    if ($null -ne $bucket.secondaryRemainingPercent) {
-        $parts += "weekly remaining $($bucket.secondaryRemainingPercent)% reset $(Format-ShortDisplayDate $bucket.secondaryResetsAt)"
+    if ($null -ne $week.remainingPercent) {
+        $parts += "weekly remaining $($week.remainingPercent)% reset $(Format-ShortDisplayDate $week.resetsAt)"
     }
     if ($null -ne $script:State.liveUsage.resetCreditsAvailable) {
         $parts += "resets $($script:State.liveUsage.resetCreditsAvailable)"
@@ -1729,7 +1611,7 @@ function Format-TaskbarBadgeText {
     $secondary = "--"
     $weeklyRemaining = Get-WeeklyBucketRemainingPercent -Bucket $bucket
     if ($null -ne $weeklyRemaining) {
-        $secondary = "$weeklyRemaining%"
+        $secondary = (Format-RemainingPercent $weeklyRemaining)
     }
 
     return "weekly $secondary"
@@ -1766,7 +1648,7 @@ function Get-NextTaskbarBadgeSource {
 function Get-TaskbarBadgeData {
     param([string]$Source)
 
-    $neutralColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
+    $neutralColor = if ($script:BadgeTheme -eq 'Dark') { [System.Drawing.Color]::FromArgb(196,198,208) } else { [System.Drawing.Color]::FromArgb(82,88,100) }
 
     if ($Source -eq "qwen") {
         $usage = Get-QwenUsageSnapshot
@@ -1782,8 +1664,8 @@ function Get-TaskbarBadgeData {
             }
             $items += [pscustomobject]@{
                 Label = $definition.Label
-                Text = $(if ($null -ne $remaining) { "$remaining%" } else { "--" })
-                Color = $(if ($null -ne $remaining) { Get-PercentColor -Percent $remaining } else { $neutralColor })
+                Text = $(if ($null -ne $remaining) { (Format-RemainingPercent $remaining) } else { "--" })
+                Color = $(if ($null -ne $remaining -and -not [bool]$usage.stale) { Get-PercentColor -Percent $remaining } else { $neutralColor })
             }
         }
 
@@ -1816,8 +1698,8 @@ function Get-TaskbarBadgeData {
             }
             $items += [pscustomobject]@{
                 Label = $definition.Label
-                Text = $(if ($null -ne $remaining) { "$remaining%" } else { "--" })
-                Color = $(if ($null -ne $remaining) { Get-PercentColor -Percent $remaining } else { $neutralColor })
+                Text = $(if ($null -ne $remaining) { (Format-RemainingPercent $remaining) } else { "--" })
+                Color = $(if ($null -ne $remaining -and -not [bool]$usage.stale) { Get-PercentColor -Percent $remaining } else { $neutralColor })
             }
         }
 
@@ -1839,12 +1721,12 @@ function Get-TaskbarBadgeData {
         $usage = Get-AntigravityUsageSnapshot
         $items = @()
         if ($null -ne $usage -and [bool]$usage.available) {
-            foreach ($item in @($usage.items) | Select-Object -First 3) {
+            foreach ($item in @(Get-AntigravityDisplayItems $usage) | Select-Object -First 3) {
                 $remaining = $item.remainingPercent
                 $items += [pscustomobject]@{
                     Label = [string]$item.label
-                    Text = $(if ($null -ne $remaining) { "$remaining%" } else { "--" })
-                    Color = $(if ($null -ne $remaining) { Get-PercentColor -Percent $remaining } else { $neutralColor })
+                    Text = $(if ($null -ne $remaining) { (Format-RemainingPercent $remaining) } else { "--" })
+                    Color = $(if ($null -ne $remaining -and -not [bool]$usage.stale) { Get-PercentColor -Percent $remaining } else { $neutralColor })
                 }
             }
         }
@@ -1882,8 +1764,8 @@ function Get-TaskbarBadgeData {
             }
             $items += [pscustomobject]@{
                 Label = $definition.Label
-                Text = $(if ($null -ne $remaining) { "$remaining%" } else { "--" })
-                Color = $(if ($null -ne $remaining) { Get-PercentColor -Percent $remaining } else { $neutralColor })
+                Text = $(if ($null -ne $remaining) { (Format-RemainingPercent $remaining) } else { "--" })
+                Color = $(if ($null -ne $remaining -and -not [bool]$usage.stale) { Get-PercentColor -Percent $remaining } else { $neutralColor })
             }
         }
 
@@ -1904,20 +1786,26 @@ function Get-TaskbarBadgeData {
     $bucket = Get-MainLiveBucket
     $codexSecondaryText = "--"
     $codexSecondaryColor = $neutralColor
+    $windowLabel = 'weekly'
 
     if ($null -ne $bucket) {
         $weeklyRemaining = Get-WeeklyBucketRemainingPercent -Bucket $bucket
+        if($null -eq (Get-LiveBucketWindow -Bucket $bucket -Minutes 10080) -and $null -ne $bucket.primaryWindowDurationMins){
+            $minutes=[double]$bucket.primaryWindowDurationMins
+            $windowLabel=if($minutes -lt 60){"${minutes}m"}elseif($minutes -lt 1440){'{0}h' -f ($minutes/60)}else{'{0}d' -f ($minutes/1440)}
+            $weeklyRemaining=$bucket.primaryRemainingPercent
+        }
         if ($null -ne $weeklyRemaining) {
-            $codexSecondaryText = "$weeklyRemaining%"
+            $codexSecondaryText = (Format-RemainingPercent $weeklyRemaining)
             $codexSecondaryColor = Get-PercentColor -Percent $weeklyRemaining
         }
     }
 
-    $codexItem = [pscustomobject]@{ Label = "weekly"; Text = $codexSecondaryText; Color = $codexSecondaryColor }
+    $codexItem = [pscustomobject]@{ Label = $windowLabel; Text = $codexSecondaryText; Color = $codexSecondaryColor }
     return [pscustomobject]@{
         Source = "codex"
         SourceText = ""
-        PrimaryPrefix = "weekly"
+        PrimaryPrefix = $windowLabel
         PrimaryText = $codexSecondaryText
         PrimaryColor = $codexSecondaryColor
         SecondaryPrefix = ""
@@ -1928,12 +1816,23 @@ function Get-TaskbarBadgeData {
     }
 }
 
+function Get-AntigravityDisplayItems {
+    param($Usage)
+    foreach($group in @($Usage.items | Group-Object {if($_.family){$_.family}else{$_.key}})) {
+        $known=@($group.Group | Where-Object {$null -ne $_.remainingPercent} | Sort-Object remainingPercent)
+        if($known.Count -eq $group.Count -or ($known.Count -gt 0 -and $known[0].remainingPercent -eq 0)){$known|Select-Object -First 1}
+        else{$group.Group|Where-Object {$null -eq $_.remainingPercent}|Select-Object -First 1}
+    }
+}
+
 function Get-TaskbarBadgeColor {
-    return [System.Drawing.Color]::FromArgb(252, 252, 253)
+    if ($script:BadgeTheme -ne 'Dark') { return [System.Drawing.Color]::FromArgb(250,251,253) }
+    return [System.Drawing.Color]::FromArgb(32, 33, 38)
 }
 
 function Get-TaskbarBadgeBorderColor {
-    return [System.Drawing.Color]::FromArgb(216, 221, 229)
+    if ($script:BadgeTheme -ne 'Dark') { return [System.Drawing.Color]::FromArgb(205,210,219) }
+    return [System.Drawing.Color]::FromArgb(75,78,88)
 }
 
 function Get-TaskbarBadgeAccentColor {
@@ -1948,14 +1847,17 @@ function Get-PercentColor {
     }
 
     if ($Percent -gt 50) {
-        return [System.Drawing.Color]::FromArgb(15, 157, 105)
+        if ($script:BadgeTheme -ne 'Dark') { return [System.Drawing.Color]::FromArgb(13,132,89) }
+        return [System.Drawing.Color]::FromArgb(115, 226, 181)
     }
 
     if ($Percent -ge 20) {
-        return [System.Drawing.Color]::FromArgb(202, 138, 4)
+        if ($script:BadgeTheme -ne 'Dark') { return [System.Drawing.Color]::FromArgb(142,98,10) }
+        return [System.Drawing.Color]::FromArgb(246, 206, 122)
     }
 
-    return [System.Drawing.Color]::FromArgb(209, 67, 67)
+    if ($script:BadgeTheme -ne 'Dark') { return [System.Drawing.Color]::FromArgb(196,45,57) }
+    return [System.Drawing.Color]::FromArgb(255, 144, 153)
 }
 
 function Get-TaskbarBadgeBounds {
@@ -1974,7 +1876,7 @@ function Get-TaskbarBadgeBounds {
     $taskbarTop = $workArea.Top - $bounds.Top
 
     $trayArrowWidth = ConvertTo-BadgePixels 248
-    $x = $bounds.Right - $trayArrowWidth - $width - (ConvertTo-BadgePixels 4)
+    $x = $bounds.Right - $trayArrowWidth - $width - (ConvertTo-BadgePixels 16)
 
     if ($taskbarHeight -gt 0) {
         $height = [Math]::Min((ConvertTo-BadgePixels 28), [Math]::Max((ConvertTo-BadgePixels 24), $taskbarHeight - (ConvertTo-BadgePixels 8)))
@@ -2290,7 +2192,8 @@ function Get-AntigravityBadgeIconRectangle {
 function New-BadgeLogoImage {
     param(
         [int]$Size = 22,
-        [string]$Source = "codex"
+        [string]$Source = "codex",
+        [switch]$DarkSurface
     )
 
     $bitmap = New-Object System.Drawing.Bitmap $Size, $Size
@@ -2300,6 +2203,12 @@ function New-BadgeLogoImage {
         $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
         $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
         $graphics.Clear([System.Drawing.Color]::Transparent)
+        $iconInset = 0
+        if ($DarkSurface -and $Source -eq 'codex') {
+            $disc = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(245,246,248))
+            try { $graphics.FillEllipse($disc,0,0,($Size-1),($Size-1)) } finally { $disc.Dispose() }
+            $iconInset = [Math]::Max(1,[int][Math]::Round($Size * 3.0 / 22))
+        }
 
         if ($Source -eq "qwen") {
             $qwenIconPath = Join-Path $PSScriptRoot "assets\qwen-logo.png"
@@ -2335,7 +2244,7 @@ function New-BadgeLogoImage {
                 if ([System.IO.Path]::GetExtension($iconPath) -match '^\.(png|jpg|jpeg|bmp)$') {
                     $sourceImage = [System.Drawing.Image]::FromFile($iconPath)
                     try {
-                        $imageRect = New-Object System.Drawing.Rectangle 0, 0, $Size, $Size
+                        $imageRect = New-Object System.Drawing.Rectangle $iconInset, $iconInset, ($Size-2*$iconInset), ($Size-2*$iconInset)
                         $graphics.DrawImage($sourceImage, $imageRect)
                     }
                     finally {
@@ -2352,7 +2261,7 @@ function New-BadgeLogoImage {
                         $iconRect = $(if ($Source -in @("antigravity", "opencodego")) {
                             New-Object System.Drawing.Rectangle -2, -2, ($Size + 4), ($Size + 4)
                         } else {
-                            New-Object System.Drawing.Rectangle 0, 0, $Size, $Size
+                            New-Object System.Drawing.Rectangle $iconInset, $iconInset, ($Size-2*$iconInset), ($Size-2*$iconInset)
                         })
                         if ($Source -eq "claude" -and [System.IO.Path]::GetExtension($iconPath) -ieq ".ico") {
                             $sourceBitmap = $icon.ToBitmap()
@@ -2421,75 +2330,19 @@ function New-BadgeLogoImage {
     }
 }
 
-function New-RoundedRectanglePath {
-    param(
-        [System.Drawing.Rectangle]$Rect,
-        [int]$Radius
-    )
-
-    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $diameter = $Radius * 2
-
-    $path.AddArc($Rect.X, $Rect.Y, $diameter, $diameter, 180, 90)
-    $path.AddArc($Rect.Right - $diameter, $Rect.Y, $diameter, $diameter, 270, 90)
-    $path.AddArc($Rect.Right - $diameter, $Rect.Bottom - $diameter, $diameter, $diameter, 0, 90)
-    $path.AddArc($Rect.X, $Rect.Bottom - $diameter, $diameter, $diameter, 90, 90)
-    $path.CloseFigure()
-
-    return $path
-}
-
-function Paint-TaskbarBadgeSurface {
-    param(
-        [System.Drawing.Graphics]$Graphics,
-        [System.Drawing.Rectangle]$ClientRectangle
-    )
-
-    if ($null -eq $Graphics -or $ClientRectangle.Width -le 1 -or $ClientRectangle.Height -le 1) {
-        return
-    }
-
-    $Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-
-    $surfaceRect = New-Object System.Drawing.Rectangle 0, 0, ($ClientRectangle.Width - 1), ($ClientRectangle.Height - 1)
-    $radius = [Math]::Max(1, [int](($surfaceRect.Height - 1) / 2))
-    $surfacePath = New-RoundedRectanglePath -Rect $surfaceRect -Radius $radius
-    $surfaceBrush = New-Object System.Drawing.SolidBrush (Get-TaskbarBadgeColor)
-    $borderPen = New-Object System.Drawing.Pen (Get-TaskbarBadgeBorderColor), 1
+function New-TaskbarBadgeBitmap {
+    $bitmap = [UtpPillForm]::RenderSurface($script:BadgeForm.Width, $script:BadgeForm.Height, (Get-TaskbarBadgeColor), (Get-TaskbarBadgeBorderColor))
     try {
-        $Graphics.FillPath($surfaceBrush, $surfacePath)
-        $Graphics.DrawPath($borderPen, $surfacePath)
-
-        $highlightInset = [Math]::Max(6, $radius)
-        $highlightPen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(210, 255, 255, 255)), 1
-        try {
-            $Graphics.DrawLine($highlightPen, $highlightInset, 1, ($surfaceRect.Right - $highlightInset), 1)
-        }
-        finally {
-            $highlightPen.Dispose()
-        }
-    }
-    finally {
-        $borderPen.Dispose()
-        $surfaceBrush.Dispose()
-        $surfacePath.Dispose()
-    }
+        [UtpPillForm]::DrawViewport($bitmap, $script:BadgeTextViewport)
+        [UtpPillForm]::DrawViewport($bitmap, $script:BadgeLogoViewport)
+        return $bitmap
+    } catch { $bitmap.Dispose(); throw }
 }
 
-function Set-RoundedBadgeRegion {
-    if ($null -eq $script:BadgeForm -or $script:BadgeForm.IsDisposed) {
-        return
-    }
-
-    $rect = New-Object System.Drawing.Rectangle 0, 0, $script:BadgeForm.Width, $script:BadgeForm.Height
-    $path = New-RoundedRectanglePath -Rect $rect -Radius ([Math]::Max(1, [int]($script:BadgeForm.Height / 2)))
-    $oldRegion = $script:BadgeForm.Region
-    $script:BadgeForm.Region = New-Object System.Drawing.Region $path
-    if ($null -ne $oldRegion) {
-        $oldRegion.Dispose()
-    }
-    $path.Dispose()
+function Present-TaskbarBadge {
+    if ($null -eq $script:BadgeForm -or $script:BadgeForm.IsDisposed) { return }
+    $bitmap = New-TaskbarBadgeBitmap
+    try { $script:BadgeForm.Present($bitmap) } finally { $bitmap.Dispose() }
 }
 
 function Set-BadgeWindowStyle {
@@ -2576,6 +2429,13 @@ function Hide-TaskbarBadge {
 }
 
 function Dispose-TaskbarBadge {
+    foreach ($picture in @($script:BadgeLogo, $script:BadgeLogoNext)) {
+        if ($null -ne $picture -and $null -ne $picture.Image) { $picture.Image.Dispose(); $picture.Image = $null }
+    }
+    foreach ($viewport in @($script:BadgeLogoViewport, $script:BadgeTextViewport)) {
+        if ($null -ne $viewport) { $viewport.Dispose() }
+    }
+    if ($null -ne $script:BadgeToolTip) { $script:BadgeToolTip.Dispose(); $script:BadgeToolTip = $null }
     if ($null -ne $script:BadgeForm) {
         try {
             if ($null -ne $script:BadgeAnimationTimer) {
@@ -2612,6 +2472,7 @@ function Dispose-TaskbarBadge {
         $script:BadgeLastOcclusionRestoreAt = $null
         $script:BadgeHovering = $false
         $script:BadgeAnimating = $false
+        $script:BadgePendingSource = ""
     }
 }
 
@@ -2688,13 +2549,14 @@ function Set-BadgePictureBoxImage {
         return
     }
 
-    if ([string]$PictureBox.Tag -eq $Source -and $null -ne $PictureBox.Image) {
+    $imageKey = "$Source|$script:BadgeTheme"
+    if ([string]$PictureBox.Tag -eq $imageKey -and $null -ne $PictureBox.Image -and $PictureBox.Image.Width -eq $PictureBox.Width) {
         return
     }
 
     $oldImage = $PictureBox.Image
-    $PictureBox.Image = New-BadgeLogoImage -Size 22 -Source $Source
-    $PictureBox.Tag = $Source
+    $PictureBox.Image = New-BadgeLogoImage -Size $PictureBox.Width -Source $Source -DarkSurface:($script:BadgeTheme -eq 'Dark')
+    $PictureBox.Tag = $imageKey
     if ($null -ne $oldImage) {
         $oldImage.Dispose()
     }
@@ -2781,12 +2643,14 @@ function Set-BadgeRowContent {
             $labelControl.Location = New-Object System.Drawing.Point $x, 0
             $labelControl.Width = ConvertTo-BadgePixels $labelWidth
             $labelControl.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
-            $labelControl.ForeColor = [System.Drawing.Color]::FromArgb(52, 56, 64)
+            $labelControl.BackColor = Get-TaskbarBadgeColor
+            $labelControl.ForeColor = if ($script:BadgeTheme -eq 'Dark') { [System.Drawing.Color]::FromArgb(224,226,233) } else { [System.Drawing.Color]::FromArgb(52,56,64) }
             $labelControl.Text = $item.Label
             $x = $labelControl.Right + $labelValueGap
             $valueControl.Location = New-Object System.Drawing.Point $x, 0
             $valueControl.Width = ConvertTo-BadgePixels $script:BadgeValueWidth
             $valueControl.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+            $valueControl.BackColor = Get-TaskbarBadgeColor
             $valueControl.ForeColor = $item.Color
             $valueControl.Text = $item.Text
             $x = $valueControl.Right
@@ -2816,9 +2680,6 @@ function Set-TaskbarBadgeWidth {
         $script:BadgeTextViewport.Width = $textWidth
     }
     foreach ($row in @($script:BadgeCurrentRow, $script:BadgeNextRow)) { if ($null -ne $row) { $row.Width = $textWidth } }
-    if ($widthChanged -or $null -eq $script:BadgeForm.Region) {
-        Set-RoundedBadgeRegion
-    }
     if ($widthChanged) {
         $script:BadgeForm.Invalidate($true)
     }
@@ -2848,14 +2709,14 @@ function Set-BadgeTextYOffset {
         $script:BadgeNextRow.Location = New-Object System.Drawing.Point 0, -$rowHeight
     }
     if ($null -ne $script:BadgeLogoNext) {
-        $script:BadgeLogoNext.Location = New-Object System.Drawing.Point 0, -22
+        $script:BadgeLogoNext.Location = Get-HiddenBadgeLogoLocation
     }
 }
 
 function Get-TaskbarBadgeRenderSignature {
     param([Parameter(Mandatory = $true)] [object]$Data)
 
-    $parts = @([string]$Data.Source, [string]$Data.Width)
+    $parts = @([string]$Data.Source, [string]$Data.Width, $script:BadgeTheme)
     foreach ($item in @($Data.Items)) {
         $color = 0
         if ($null -ne $item.Color) {
@@ -2890,8 +2751,44 @@ function Set-TaskbarBadgeContent {
     Set-BadgeTextYOffset -Offset 0
     $script:BadgeDisplayedSource = $Data.Source
     $script:BadgeRenderSignature = Get-TaskbarBadgeRenderSignature -Data $Data
+    Update-BadgeToolTip -Source $Source
+    Present-TaskbarBadge
     if ($null -ne $script:BadgeForm -and -not $script:BadgeForm.IsDisposed) {
         $script:BadgeForm.Invalidate()
+    }
+}
+
+function Get-ProviderStatusMessage {
+    param([string]$Source)
+    $names = @{codex='ChatGPT / Codex';claude='Claude';antigravity='Antigravity';opencodego='OpenCode Go';qwen='Qwen Token Plan'}
+    $name = $names[$Source]
+    if ($script:ProviderRefreshes.ContainsKey($Source)) { return "$name - Refreshing..." }
+    if ($script:ProviderRefreshErrors.ContainsKey($Source)) { return "$name - $($script:ProviderRefreshErrors[$Source])" }
+    $usage = switch ($Source) {
+        'codex' { $script:State.liveUsage }
+        'claude' { Get-ClaudeUsageSnapshot }
+        'antigravity' { Get-AntigravityUsageSnapshot }
+        'opencodego' { Get-OpenCodeGoUsageSnapshot }
+        'qwen' { Get-QwenUsageSnapshot }
+    }
+    if ($null -eq $usage) { return "$name - No usage data yet" }
+    if ([string]$usage.lastError -eq 'auth_expired') { return "$name - Session expired. Right-click > Set up $name to sign in again." }
+    if ([bool]$usage.stale -and [bool]$usage.available) { return "$name - Cached values from $(Format-DisplayDate $usage.lastSuccessAt)" }
+    if (-not [string]::IsNullOrWhiteSpace([string]$usage.lastError)) { return "$name - Unable to refresh. Right-click > Refresh now." }
+    $checked = Get-DateOrNull ([string]$usage.lastCheckedAt)
+    $maxAge = if ($Source -eq 'antigravity') { 5 } else { 15 }
+    if ($null -eq $checked -or ((Get-Date) - $checked).TotalMinutes -gt $maxAge) {
+        if ($Source -eq 'claude') { return "$name - Usage is out of date. Open Claude Code or Claude Desktop to update it." }
+        return "$name - Usage is out of date. Right-click > Refresh now."
+    }
+    return "$name - Updated $(Format-DisplayDate $usage.lastCheckedAt)"
+}
+
+function Update-BadgeToolTip {
+    param([string]$Source)
+    if ($null -ne $script:BadgeToolTip) { $script:BadgeToolTip.Dispose(); $script:BadgeToolTip=$null }
+    if ($null -ne $script:BadgeForm -and -not $script:BadgeForm.IsDisposed) {
+        $script:BadgeForm.AccessibleName=Get-ProviderStatusMessage -Source $Source
     }
 }
 
@@ -2912,7 +2809,7 @@ function Update-BadgeSlideAnimation {
     }
 
     $durationMs = $script:BadgeAnimationDurationMs
-    $elapsedMs = ((Get-Date) - $script:BadgeAnimationStartedAt).TotalMilliseconds
+    $elapsedMs = $script:BadgeAnimationStartedAt.Elapsed.TotalMilliseconds
     $progress = [Math]::Min(1, [Math]::Max(0, $elapsedMs / $durationMs))
     $ease = Get-BadgeTransitionEase -Progress $progress
     $rowHeight = $(if ($null -ne $script:BadgeTextViewport) { [Math]::Max(1, $script:BadgeTextViewport.Height) } else { [Math]::Max(1, $script:BadgeForm.Height - 2) })
@@ -2936,8 +2833,7 @@ function Update-BadgeSlideAnimation {
     if ($null -ne $script:BadgeLogoNext) {
         $script:BadgeLogoNext.Location = New-Object System.Drawing.Point 0, ([int](-$logoHeight + ($logoHeight * $ease)))
     }
-    $script:BadgeForm.Invalidate($true)
-    $script:BadgeForm.Update()
+    Present-TaskbarBadge
 
     if ($progress -ge 1) {
         Set-TaskbarBadgeContent -Source $script:BadgeAnimationTargetSource
@@ -2951,6 +2847,9 @@ function Update-BadgeSlideAnimation {
         if ($null -ne $script:BadgeAnimationTimer) {
             $script:BadgeAnimationTimer.Stop()
         }
+        $pending = $script:BadgePendingSource
+        $script:BadgePendingSource = ""
+        if (-not [string]::IsNullOrWhiteSpace($pending) -and $pending -ne $script:BadgeDisplayedSource) { Start-BadgeSlideToSource -Source $pending }
     }
 }
 
@@ -2967,6 +2866,14 @@ function Start-BadgeSlideToSource {
         return
     }
 
+    if ($script:BadgeAnimating) {
+        $script:BadgePendingSource = $Source
+        return
+    }
+    if (-not [System.Windows.Forms.SystemInformation]::IsMenuAnimationEnabled) {
+        Set-TaskbarBadgeContent -Source $Source
+        return
+    }
     $targetData = Get-TaskbarBadgeData -Source $Source
     if ($null -ne $script:BadgeNextRow) {
         Set-BadgeRowContent -Row ([pscustomobject]@{
@@ -2996,7 +2903,7 @@ function Start-BadgeSlideToSource {
     $script:BadgeAnimationTargetSource = $Source
     $script:BadgeAnimationStartWidth = [int][Math]::Round($script:BadgeForm.Width / $script:BadgeDpiScale, 0)
     $script:BadgeAnimationTargetWidth = [int]$targetData.Width
-    $script:BadgeAnimationStartedAt = Get-Date
+    $script:BadgeAnimationStartedAt = [Diagnostics.Stopwatch]::StartNew()
     $script:BadgeAnimationHalfUpdated = $false
     $script:BadgeAnimating = $true
     $script:BadgeAnimationTimer.Start()
@@ -3005,7 +2912,7 @@ function Start-BadgeSlideToSource {
 function Toggle-TaskbarBadgeDefaultSource {
     $next = Get-NextTaskbarBadgeSource (Get-TaskbarBadgeDefaultSource)
     $script:State.settings.taskbarBadgeDefaultSource = $next
-    Save-State
+    $script:PendingStateSave = $true
     $script:BadgeHovering = $false
     Start-BadgeSlideToSource -Source $next
 }
@@ -3031,22 +2938,18 @@ function Ensure-TaskbarBadge {
     }
 
     if ($null -eq $script:BadgeForm -or $script:BadgeForm.IsDisposed) {
-        $badge = New-Object System.Windows.Forms.Form
+        $badge = New-Object UtpPillForm
         $badge.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
         $badge.Text = "Usage Tray Pill"
         $badge.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
         $badge.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
         $badge.ShowInTaskbar = $false
         $badge.ShowIcon = $false
+        $badge.Cursor = [System.Windows.Forms.Cursors]::Hand
         $badge.TopMost = $false
         $badge.BackColor = Get-TaskbarBadgeColor
         $badge.Bounds = Get-TaskbarBadgeBounds
         Enable-ControlDoubleBuffering -Control $badge
-        $badge.Add_Paint({
-            param($eventSource, $eventData)
-            Paint-TaskbarBadgeSurface -Graphics $eventData.Graphics -ClientRectangle $eventSource.ClientRectangle
-        })
-
         $logoViewport = New-Object System.Windows.Forms.Panel
         $logoViewport.Location = Get-BadgeLogoViewportLocation -BadgeHeight $badge.Height
         $logoViewport.Size = New-Object System.Drawing.Size (ConvertTo-BadgePixels 22), (ConvertTo-BadgePixels 22)
@@ -3058,7 +2961,7 @@ function Ensure-TaskbarBadge {
             param($eventSource, $eventData)
             Invoke-TaskbarBadgeMouseUp -EventArgs $eventData
         })
-        $badge.Controls.Add($logoViewport)
+        # Layout controls are offscreen metadata; the visible window is one alpha bitmap.
 
         $logoNext = New-Object System.Windows.Forms.PictureBox
         $logoNext.Location = Get-HiddenBadgeLogoLocation
@@ -3096,7 +2999,7 @@ function Ensure-TaskbarBadge {
             param($eventSource, $eventData)
             Invoke-TaskbarBadgeMouseUp -EventArgs $eventData
         })
-        $badge.Controls.Add($textViewport)
+
 
         $nextRow = New-BadgeRow -Y -28 -BackColor $badge.BackColor
         $currentRow = New-BadgeRow -Y 0 -BackColor $badge.BackColor
@@ -3143,6 +3046,17 @@ function Refresh-TaskbarBadge {
     param([switch]$GeometryOnly)
 
     $geometryOnlyMode = [bool]$GeometryOnly
+    $theme = Get-SystemTrayIconTheme
+    if ($script:BadgeTheme -ne $theme) {
+        $script:BadgeTheme = $theme
+        $script:BadgeRenderSignature = ''
+        $geometryOnlyMode = $false
+        if ($script:BadgeAnimating) {
+            $script:BadgeAnimationTimer.Stop()
+            $script:BadgeAnimating = $false
+            $script:BadgePendingSource = ''
+        }
+    }
     if (-not [bool]$script:State.settings.showTaskbarBadge) {
         Hide-TaskbarBadge
         return
@@ -3178,6 +3092,7 @@ function Refresh-TaskbarBadge {
         $targetSource = Get-TaskbarBadgeDefaultSource
         $targetData = Get-TaskbarBadgeData -Source $targetSource
         $targetSignature = Get-TaskbarBadgeRenderSignature -Data $targetData
+        Update-BadgeToolTip -Source $targetSource
     }
     $logicalWidth = [Math]::Max(1, [int][Math]::Round($script:BadgeForm.Width / $script:BadgeDpiScale, 0))
     if ($null -ne $targetData) {
@@ -3255,9 +3170,7 @@ function Refresh-TaskbarBadge {
         }
     }
 
-    if ($boundsChanged -or $null -eq $script:BadgeForm.Region) {
-        Set-RoundedBadgeRegion
-    }
+    if ($boundsChanged) { Present-TaskbarBadge }
 
     $wasVisible = $script:BadgeForm.Visible
     if (-not $wasVisible) {
@@ -3823,10 +3736,11 @@ function New-ListView {
     $list.GridLines = $false
     $list.MultiSelect = $false
     $list.HideSelection = $false
-    $list.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $list.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+    $list.ShowItemToolTips = $true
     $list.BackColor = [System.Drawing.Color]::White
     $list.ForeColor = [System.Drawing.Color]::FromArgb(36, 39, 46)
-    $list.Font = New-Object System.Drawing.Font "Segoe UI", 9
+    $list.Font = New-Object System.Drawing.Font "Segoe UI", 10
     $list.HeaderStyle = [System.Windows.Forms.ColumnHeaderStyle]::Nonclickable
     return $list
 }
@@ -3844,7 +3758,8 @@ function Set-MainWindowButtonStyle {
     $Button.UseVisualStyleBackColor = $false
     $Button.Cursor = [System.Windows.Forms.Cursors]::Hand
     $Button.Font = New-Object System.Drawing.Font "Segoe UI Semibold", 9
-    $Button.FlatAppearance.BorderSize = 1
+    $Button.FlatAppearance.BorderSize = 0
+    $Button.Padding = New-Object System.Windows.Forms.Padding 8, 0, 8, 0
 
     if ($Kind -eq "Primary") {
         $Button.BackColor = [System.Drawing.Color]::FromArgb(208, 34, 121)
@@ -3855,7 +3770,7 @@ function Set-MainWindowButtonStyle {
         return
     }
 
-    $Button.BackColor = [System.Drawing.Color]::White
+    $Button.BackColor = [System.Drawing.Color]::FromArgb(239, 238, 235)
     $Button.ForeColor = [System.Drawing.Color]::FromArgb(45, 48, 56)
     $Button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(205, 209, 216)
     $Button.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(245, 246, 248)
@@ -3870,6 +3785,7 @@ function Set-MainWindowListRows {
 
     for ($index = 0; $index -lt $List.Items.Count; $index++) {
         $item = $List.Items[$index]
+        $item.ToolTipText = (@($item.SubItems | ForEach-Object { $_.Text }) -join " | ")
         $item.BackColor = if (($index % 2) -eq 0) {
             [System.Drawing.Color]::White
         }
@@ -3921,6 +3837,326 @@ function Exit-TrayApp {
     [System.Windows.Forms.Application]::Exit()
 }
 
+function Update-MainWindow {
+    $form = $script:MainForm
+    $header = $script:MainWindowControls.Header
+    $liveStatusLabel = $script:MainWindowControls.Status
+    $refreshLiveButton = $script:MainWindowControls.Refresh
+    $liveList = $script:MainWindowControls.Live
+    $resetsList = $script:MainWindowControls.Resets
+    $limitsList = $script:MainWindowControls.Limits
+
+        if ($null -eq $form -or $form.IsDisposed) {
+            return
+        }
+
+        if ($null -ne $script:MainWindowControls.QwenEnabled) { $script:MainWindowControls.QwenEnabled.Checked=[bool]$script:State.settings.qwenTokenPlanEnabled }
+        if($null -ne $script:MainWindowControls.ClaudeControl){$script:MainWindowControls.ClaudeControl.Checked=[bool]$script:State.settings.claudeControlEnabled}
+        Update-CodexBucketChoices
+        $refreshing = $script:ProviderRefreshes.Count -gt 0
+        $refreshLiveButton.Enabled = -not $refreshing
+        $refreshLiveButton.Text = $(if ($refreshing) { "Refreshing..." } else { "Refresh now" })
+        $selections = @{}
+        foreach ($list in @($liveList, $resetsList, $limitsList)) {
+            $selections[$list.GetHashCode()] = @($list.SelectedItems | ForEach-Object { if ($null -ne $_.Tag.id) { [string]$_.Tag.id } else { $_.Text } })
+            $list.BeginUpdate()
+        }
+        try {
+        $snapshot = Get-StatusSnapshot
+        $codexState = $(if ($snapshot.CodexRunning) { "active" } else { "inactive" })
+        $resetLabel = $(if ($snapshot.ActiveResetCount -eq 1) { "active reset" } else { "active resets" })
+        $header.Text = "Your AI usage, in one quiet place.    $($snapshot.ActiveResetCount) $resetLabel"
+
+        $lastChecked = Format-DisplayDate $script:State.liveUsage.lastCheckedAt
+        $liveStatus = "Last checked: $lastChecked"
+        if (-not [string]::IsNullOrWhiteSpace([string]$script:State.liveUsage.lastError)) {
+            $liveStatus += " | error: $($script:State.liveUsage.lastError)"
+        }
+        elseif ($null -ne $script:State.liveUsage.resetCreditsAvailable) {
+            $liveStatus += " | resets available: $($script:State.liveUsage.resetCreditsAvailable)"
+        }
+        $liveStatusLabel.Text = Limit-Text -Text $liveStatus -MaxLength 130
+
+        $liveList.Items.Clear()
+        foreach ($bucket in @(Get-LiveUsageBuckets)) {
+            $bucketName = [string]$bucket.limitName
+            if ([string]::IsNullOrWhiteSpace($bucketName)) {
+                $bucketName = [string]$bucket.limitId
+            }
+            if ([string]::IsNullOrWhiteSpace($bucketName)) {
+                $bucketName = "codex"
+            }
+
+            $item = New-Object System.Windows.Forms.ListViewItem $bucketName
+            $five = Get-LiveBucketWindow -Bucket $bucket -Minutes 300
+            $week = Get-LiveBucketWindow -Bucket $bucket -Minutes 10080
+            [void]$item.SubItems.Add($(if ($null -ne $five.remainingPercent) { (Format-RemainingPercent $five.remainingPercent) } else { "-" }))
+            [void]$item.SubItems.Add((Format-ShortDisplayDate $five.resetsAt))
+            [void]$item.SubItems.Add($(if ($null -ne $week.remainingPercent) { (Format-RemainingPercent $week.remainingPercent) } else { "-" }))
+            [void]$item.SubItems.Add((Format-ShortDisplayDate $week.resetsAt))
+            [void]$item.SubItems.Add([string]$bucket.creditsBalance)
+            [void]$item.SubItems.Add([string]$bucket.planType)
+            [void]$item.SubItems.Add([string]$bucket.rateLimitReachedType)
+            $item.Tag = $bucket
+            [void]$liveList.Items.Add($item)
+        }
+
+        $claudeUsage = Get-ClaudeUsageSnapshot
+        $claudeName = "Claude Code"
+        $claudeStatus = "waiting for statusline"
+        if ($null -ne $claudeUsage) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$claudeUsage.modelName)) {
+                $claudeName = "Claude Code ($($claudeUsage.modelName))"
+            }
+            $claudeStatus = $(if (-not [string]::IsNullOrWhiteSpace([string]$claudeUsage.lastError)) { "error" } elseif($claudeUsage.source -eq "claude-code-control"){"CLI quotas"}else { "statusline" })
+        }
+
+        $claudeItem = New-Object System.Windows.Forms.ListViewItem $claudeName
+        [void]$claudeItem.SubItems.Add($(if ($null -ne $claudeUsage -and $null -ne $claudeUsage.fiveHourRemainingPercent) { (Format-RemainingPercent $claudeUsage.fiveHourRemainingPercent) } else { "-" }))
+        [void]$claudeItem.SubItems.Add($(if ($null -ne $claudeUsage) { Format-ShortDisplayDate $claudeUsage.fiveHourResetsAt } else { "-" }))
+        [void]$claudeItem.SubItems.Add($(if ($null -ne $claudeUsage -and $null -ne $claudeUsage.sevenDayRemainingPercent) { (Format-RemainingPercent $claudeUsage.sevenDayRemainingPercent) } else { "-" }))
+        [void]$claudeItem.SubItems.Add($(if ($null -ne $claudeUsage) { Format-ShortDisplayDate $claudeUsage.sevenDayResetsAt } else { "-" }))
+        [void]$claudeItem.SubItems.Add("")
+        [void]$claudeItem.SubItems.Add($(if ($null -ne $claudeUsage) { [string]$claudeUsage.version } else { "" }))
+        [void]$claudeItem.SubItems.Add($claudeStatus)
+        $claudeItem.Tag = $claudeUsage
+        [void]$liveList.Items.Add($claudeItem)
+
+        foreach($quota in @((Get-AntigravityUsageSnapshot).items)) {
+            $item=New-Object System.Windows.Forms.ListViewItem ("Antigravity: $($quota.label)")
+            $isFive=[string]$quota.label -match '5h$'
+            [void]$item.SubItems.Add($(if($isFive){Format-RemainingPercent $quota.remainingPercent}else{'-'}))
+            [void]$item.SubItems.Add($(if($isFive){Format-ShortDisplayDate $quota.resetsAt}else{'-'}))
+            [void]$item.SubItems.Add($(if(-not $isFive){Format-RemainingPercent $quota.remainingPercent}else{'-'}))
+            [void]$item.SubItems.Add($(if(-not $isFive){Format-ShortDisplayDate $quota.resetsAt}else{'-'}))
+            [void]$item.SubItems.Add('');[void]$item.SubItems.Add('');[void]$item.SubItems.Add('CLI quota')
+            $item.Tag=$quota
+            [void]$liveList.Items.Add($item)
+        }
+
+        $openCodeGoUsage = Get-OpenCodeGoUsageSnapshot
+        $openCodeGoValues = @{}
+        if ($null -ne $openCodeGoUsage) {
+            foreach ($usageItem in @($openCodeGoUsage.items)) {
+                $openCodeGoValues[[string]$usageItem.key] = $usageItem
+            }
+        }
+        $openCodeGoItem = New-Object System.Windows.Forms.ListViewItem "OpenCode Go"
+        $openCodeGoFiveHour = $openCodeGoValues["five_hour"]
+        $openCodeGoWeekly = $openCodeGoValues["seven_day"]
+        $openCodeGoMonthly = $openCodeGoValues["monthly"]
+        [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoFiveHour -and $null -ne $openCodeGoFiveHour.remainingPercent) { (Format-RemainingPercent $openCodeGoFiveHour.remainingPercent) } else { "-" }))
+        [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoFiveHour) { Format-ShortDisplayDate $openCodeGoFiveHour.resetsAt } else { "-" }))
+        [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoWeekly -and $null -ne $openCodeGoWeekly.remainingPercent) { (Format-RemainingPercent $openCodeGoWeekly.remainingPercent) } else { "-" }))
+        [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoWeekly) { Format-ShortDisplayDate $openCodeGoWeekly.resetsAt } else { "-" }))
+        [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoMonthly -and $null -ne $openCodeGoMonthly.remainingPercent) { (Format-RemainingPercent $openCodeGoMonthly.remainingPercent) } else { "-" }))
+        [void]$openCodeGoItem.SubItems.Add("")
+        [void]$openCodeGoItem.SubItems.Add((Get-OpenCodeGoStatusText))
+        $openCodeGoItem.Tag = $openCodeGoUsage
+        [void]$liveList.Items.Add($openCodeGoItem)
+
+        $qwenUsage = Get-QwenUsageSnapshot
+        $qwenValues = @{}
+        if ($null -ne $qwenUsage) {
+            foreach ($usageItem in @($qwenUsage.items)) {
+                $qwenValues[[string]$usageItem.key] = $usageItem
+            }
+        }
+        $qwenItem = New-Object System.Windows.Forms.ListViewItem "Qwen Token Plan"
+        $qwenFiveHour = $qwenValues["five_hour"]
+        $qwenWeekly = $qwenValues["seven_day"]
+        [void]$qwenItem.SubItems.Add($(if ($null -ne $qwenFiveHour -and $null -ne $qwenFiveHour.remainingPercent) { (Format-RemainingPercent $qwenFiveHour.remainingPercent) } else { "-" }))
+        [void]$qwenItem.SubItems.Add($(if ($null -ne $qwenFiveHour) { Format-ShortDisplayDate $qwenFiveHour.resetsAt } else { "-" }))
+        [void]$qwenItem.SubItems.Add($(if ($null -ne $qwenWeekly -and $null -ne $qwenWeekly.remainingPercent) { (Format-RemainingPercent $qwenWeekly.remainingPercent) } else { "-" }))
+        [void]$qwenItem.SubItems.Add($(if ($null -ne $qwenWeekly) { Format-ShortDisplayDate $qwenWeekly.resetsAt } else { "-" }))
+        [void]$qwenItem.SubItems.Add("")
+        [void]$qwenItem.SubItems.Add("")
+        [void]$qwenItem.SubItems.Add((Get-QwenStatusText))
+        $qwenItem.Tag = $qwenUsage
+        [void]$liveList.Items.Add($qwenItem)
+
+        $resetsList.Items.Clear()
+        foreach ($reset in ($script:State.resets | Sort-Object { Get-DateOrNull ([string]$_.expiresAt) })) {
+            $item = New-Object System.Windows.Forms.ListViewItem ([string]$reset.label)
+            [void]$item.SubItems.Add((Format-DisplayDate $reset.expiresAt))
+            [void]$item.SubItems.Add((Format-TimeLeft $reset.expiresAt))
+            [void]$item.SubItems.Add((Get-ResetStatus $reset))
+            [void]$item.SubItems.Add([string]$reset.notes)
+            $item.Tag = $reset
+            [void]$resetsList.Items.Add($item)
+        }
+
+        $limitsList.Items.Clear()
+        foreach ($limit in $script:State.limits) {
+            $item = New-Object System.Windows.Forms.ListViewItem ([string]$limit.name)
+            [void]$item.SubItems.Add([string]$limit.allowance)
+            [void]$item.SubItems.Add([string]$limit.remaining)
+            [void]$item.SubItems.Add((Format-TimeLeft $limit.resetAt))
+            [void]$item.SubItems.Add([string]$limit.notes)
+            $item.Tag = $limit
+            [void]$limitsList.Items.Add($item)
+        }
+
+        Update-UsageProviderRows
+        Set-MainWindowListRows -List $liveList
+        Set-MainWindowListRows -List $resetsList
+        Set-MainWindowListRows -List $limitsList
+        } finally {
+            foreach ($list in @($liveList, $resetsList, $limitsList)) {
+                foreach ($row in $list.Items) {
+                    $key = if ($null -ne $row.Tag.id) { [string]$row.Tag.id } else { $row.Text }
+                    if ($selections[$list.GetHashCode()] -contains $key) { $row.Selected = $true }
+                }
+                $list.EndUpdate()
+            }
+        }
+        Refresh-Tray
+}
+
+function New-UsageProviderRow {
+    param([string]$Source)
+    $names = @{codex='ChatGPT / Codex';claude='Claude';antigravity='Antigravity';opencodego='OpenCode Go';qwen='Qwen Token Plan'}
+    $panel = New-Object System.Windows.Forms.Panel
+    $panel.Height = 88
+    $panel.BackColor = [System.Drawing.Color]::White
+    Enable-ControlDoubleBuffering -Control $panel
+    $panel.Add_Paint({
+        param($eventSource,$eventData)
+        $pen=New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(237,237,240))
+        try { $eventData.Graphics.DrawLine($pen,0,($eventSource.Height-1),$eventSource.Width,($eventSource.Height-1)) } finally { $pen.Dispose() }
+    })
+    $icon = New-Object System.Windows.Forms.PictureBox
+    $icon.Location = New-Object System.Drawing.Point 4,26
+    $icon.Size = New-Object System.Drawing.Size 28,28
+    $icon.SizeMode = 'Zoom'
+    $icon.Image = New-BadgeLogoImage -Size 28 -Source $Source
+    $icon.Add_Disposed({ param($eventSource,$eventData) if($null -ne $eventSource.Image){ $eventSource.Image.Dispose() } })
+    $panel.Controls.Add($icon)
+    $name = New-Object System.Windows.Forms.Label
+    $name.Text = $names[$Source]
+    $name.Location = New-Object System.Drawing.Point 44,20
+    $name.Size = New-Object System.Drawing.Size 190,26
+    $name.Font = New-Object System.Drawing.Font 'Segoe UI Semibold',12
+    $name.ForeColor = [System.Drawing.Color]::FromArgb(36,38,44)
+    $panel.Controls.Add($name)
+    $status = New-Object System.Windows.Forms.Label
+    $status.Location = New-Object System.Drawing.Point 44,49
+    $status.Size = New-Object System.Drawing.Size 184,21
+    $status.Font = New-Object System.Drawing.Font 'Segoe UI',9
+    $status.ForeColor = [System.Drawing.Color]::FromArgb(99,104,117)
+    $panel.Controls.Add($status)
+    $groups=@()
+    for ($index=0;$index -lt 3;$index++) {
+        $group=New-Object System.Windows.Forms.Panel
+        $group.Height=76
+        $label=New-Object System.Windows.Forms.Label
+        $label.Location=New-Object System.Drawing.Point 0,8
+        $label.Size=New-Object System.Drawing.Size 154,18
+        $label.Font=New-Object System.Drawing.Font 'Segoe UI',9
+        $label.ForeColor=[System.Drawing.Color]::FromArgb(99,104,117)
+        $group.Controls.Add($label)
+        $value=New-Object System.Windows.Forms.Label
+        $value.Location=New-Object System.Drawing.Point 0,25
+        $value.Size=New-Object System.Drawing.Size 154,34
+        $value.Font=New-Object System.Drawing.Font 'Segoe UI Semibold',19
+        $value.ForeColor=[System.Drawing.Color]::FromArgb(36,38,44)
+        $group.Controls.Add($value)
+        $track=New-Object System.Windows.Forms.Panel
+        $track.Location=New-Object System.Drawing.Point 1,65
+        $track.Height=3
+        $track.BackColor=[System.Drawing.Color]::FromArgb(235,235,239)
+        $fill=New-Object System.Windows.Forms.Panel
+        $fill.Height=3
+        $track.Controls.Add($fill)
+        $group.Controls.Add($track)
+        $panel.Controls.Add($group)
+        $groups += [pscustomobject]@{Panel=$group;Label=$label;Value=$value;Track=$track;Fill=$fill;Percent=$null}
+    }
+    return [pscustomobject]@{Panel=$panel;Icon=$icon;Name=$name;Status=$status;Groups=$groups;Source=$Source}
+}
+
+function Update-UsageRowLayout {
+    param([System.Windows.Forms.Panel]$Container)
+    if ($null -eq $script:UsageProviderRows) { return }
+    $y=$Container.AutoScrollPosition.Y
+    $width=[Math]::Max(350,$Container.ClientSize.Width - 20)
+    foreach ($source in @('codex','claude','antigravity','opencodego','qwen')) {
+        $row=$script:UsageProviderRows[$source]
+        if ($null -eq $row) { continue }
+        $row.Panel.SetBounds(0,$y,$width,88)
+        $columnWidth=[int][Math]::Floor(($width-242)/3)
+        for ($index=0;$index -lt 3;$index++) {
+            $group=$row.Groups[$index]
+            $group.Panel.SetBounds((242+$index*$columnWidth),0,$columnWidth,76)
+            $group.Label.Width=$columnWidth-12
+            $group.Value.Width=$columnWidth-12
+            $group.Track.Width=[Math]::Max(10,$columnWidth-28)
+            $group.Fill.Width=if ($null -ne $group.Percent) { [int][Math]::Round($group.Track.Width*$group.Percent/100) } else { 0 }
+        }
+        $y+=88
+    }
+}
+
+function Update-UsageProviderRows {
+    if ($null -eq $script:UsageProviderRows) { return }
+    foreach ($source in @('codex','claude','antigravity','opencodego','qwen')) {
+        $row=$script:UsageProviderRows[$source]
+        $data=Get-TaskbarBadgeData -Source $source
+        $items=@($data.Items)
+        if ($source -eq 'codex') {
+            $bucket=Get-MainLiveBucket
+            $items=@(foreach ($window in @(@{Label='5h';Minutes=300},@{Label='weekly';Minutes=10080})) {
+                $value=(Get-LiveBucketWindow -Bucket $bucket -Minutes $window.Minutes).remainingPercent
+                [pscustomobject]@{Label=$window.Label;Text=$(if($null -ne $value){(Format-RemainingPercent $value)}else{'--'})}
+            })
+        }
+        $hasValues=@($items | Where-Object {$_.Text -ne '--'}).Count -gt 0
+        $status=if($hasValues){'Remaining allowance'}else{'Waiting for usage'}
+        if ($source -eq 'opencodego') { $status=Get-OpenCodeGoStatusText; if(-not $script:State.settings.openCodeGoEnabled){$status='Connect in Preferences'} }
+        if ($source -eq 'qwen') { $status=Get-QwenStatusText; if(-not $script:State.settings.qwenTokenPlanEnabled){$status='Paused in Preferences'} }
+        if ($status -in @('Connect in Preferences','Paused in Preferences')) {
+            foreach ($item in $items) { $item.Text='--' }
+        }
+        if ($source -eq 'antigravity' -and -not $hasValues) { $status='CLI setup / sign-in required' }
+        if ($source -eq 'claude' -and -not $hasValues) { $status='Open Claude to update' }
+        if ($script:ProviderRefreshes.ContainsKey($source)) { $status='Refreshing...' }
+        if ($script:ProviderRefreshErrors.ContainsKey($source)) { $status='Refresh unavailable' }
+        $row.Status.Text=$status
+        $row.Panel.AccessibleName="$($row.Name.Text). $status. " + (($items | ForEach-Object { "$($_.Label) $($_.Text)" }) -join '. ')
+        for ($index=0;$index -lt 3;$index++) {
+            $group=$row.Groups[$index]
+            $group.Panel.Visible=$index -lt $items.Count
+            if ($index -ge $items.Count) { continue }
+            $item=$items[$index]
+            $group.Label.Text=switch($item.Label){'5h'{'5-hour window'} 'weekly'{'Weekly window'} 'monthly'{'Monthly window'} default{$item.Label}}
+            $group.Value.Text=$item.Text
+            $group.Percent=if($item.Text -eq '<1%'){0.5}elseif($item.Text -match '^(\d+)%$'){[int]$Matches[1]}else{$null}
+            $group.Value.ForeColor=if($null -eq $group.Percent){[System.Drawing.Color]::FromArgb(132,136,145)}else{[System.Drawing.Color]::FromArgb(36,38,44)}
+            $group.Fill.BackColor=if($null -eq $group.Percent -or $status -eq 'cache'){[System.Drawing.Color]::FromArgb(169,173,184)}elseif($group.Percent -lt 20){[System.Drawing.Color]::FromArgb(209,67,67)}else{[System.Drawing.Color]::FromArgb(208,34,121)}
+        }
+    }
+    Update-UsageRowLayout -Container $script:MainWindowControls.Rows
+}
+
+function Update-UsageTabLayout {
+    param([System.Windows.Forms.TabPage]$Page)
+    $isLive = $Page.Text -eq 'Live usage'
+    foreach ($control in $Page.Controls) {
+        if ($control -is [System.Windows.Forms.ListView]) {
+            $control.Width = [Math]::Max(100, $Page.ClientSize.Width - 28)
+            $bottomSpace = if ($isLive -or $Page.Text -eq 'Details') { 14 } else { 54 }
+            $control.Height = [Math]::Max(60, $Page.ClientSize.Height - $control.Top - $bottomSpace)
+        } elseif ($control.Tag -eq 'provider-rows') {
+            $control.Size = New-Object System.Drawing.Size ([Math]::Max(200,$Page.ClientSize.Width - 36)),([Math]::Max(100,$Page.ClientSize.Height - 72))
+        } elseif ($control -is [System.Windows.Forms.Button]) {
+            if ($isLive) { $control.Left = [Math]::Max(14, $Page.ClientSize.Width - $control.Width - 14) }
+            else { $control.Top = [Math]::Max(14, $Page.ClientSize.Height - $control.Height - 14) }
+        } elseif ($isLive -and $control -is [System.Windows.Forms.Label]) {
+            $control.Width = [Math]::Max(100, $Page.ClientSize.Width - 162)
+        }
+    }
+}
+
 function Show-MainWindow {
     if ($null -ne $script:MainForm -and -not $script:MainForm.IsDisposed) {
         $script:MainForm.WindowState = "Normal"
@@ -3934,10 +4170,10 @@ function Show-MainWindow {
     $script:MainForm = $form
     $form.Text = "Usage Tray Pill"
     $form.StartPosition = "CenterScreen"
-    $form.ClientSize = New-Object System.Drawing.Size 960, 650
+    $form.ClientSize = New-Object System.Drawing.Size 1040, 760
     $form.MinimumSize = New-Object System.Drawing.Size 900, 620
     $form.ShowInTaskbar = $true
-    $form.BackColor = [System.Drawing.Color]::FromArgb(246, 247, 249)
+    $form.BackColor = [System.Drawing.Color]::FromArgb(245, 244, 241)
     $form.ForeColor = [System.Drawing.Color]::FromArgb(36, 39, 46)
     $form.Font = New-Object System.Drawing.Font "Segoe UI", 9
 
@@ -3947,13 +4183,13 @@ function Show-MainWindow {
 
     $title = New-Object System.Windows.Forms.Label
     $title.Text = "Usage overview"
-    $title.Location = New-Object System.Drawing.Point 20, 16
-    $title.Size = New-Object System.Drawing.Size 500, 32
-    $title.Font = New-Object System.Drawing.Font "Segoe UI Semibold", 17
+    $title.Location = New-Object System.Drawing.Point 30, 28
+    $title.Size = New-Object System.Drawing.Size 680, 45
+    $title.Font = New-Object System.Drawing.Font "Segoe UI Semibold", 26
     $form.Controls.Add($title)
 
     $header = New-Object System.Windows.Forms.Label
-    $header.Location = New-Object System.Drawing.Point 22, 50
+    $header.Location = New-Object System.Drawing.Point 33, 79
     $header.Size = New-Object System.Drawing.Size 910, 22
     $header.Anchor = "Top,Left,Right"
     $header.ForeColor = [System.Drawing.Color]::FromArgb(103, 108, 118)
@@ -3994,6 +4230,42 @@ function Show-MainWindow {
     $onlyCodexCheck.Size = New-Object System.Drawing.Size 250, 22
     $onlyCodexCheck.Checked = [bool]$script:State.settings.showOnlyWhenCodexRuns
     $settingsPanel.Controls.Add($onlyCodexCheck)
+    $qwenEnabledCheck = New-Object System.Windows.Forms.CheckBox
+    $qwenEnabledCheck.Text = 'Enable Qwen Token Plan'
+    $qwenEnabledCheck.Location = New-Object System.Drawing.Point 390,78
+    $qwenEnabledCheck.Size = New-Object System.Drawing.Size 270,24
+    $qwenEnabledCheck.Checked = [bool]$script:State.settings.qwenTokenPlanEnabled
+    $qwenEnabledCheck.Add_Click({param($eventSource,$eventData) Set-QwenEnabled -Enabled $eventSource.Checked})
+    $settingsPanel.Controls.Add($qwenEnabledCheck)
+    $claudeControlCheck=New-Object System.Windows.Forms.CheckBox
+    $claudeControlCheck.Text='Use Claude CLI quotas (experimental)'
+    $claudeControlCheck.Location=New-Object System.Drawing.Point 16,110
+    $claudeControlCheck.Size=New-Object System.Drawing.Size 330,24
+    $claudeControlCheck.Checked=[bool]$script:State.settings.claudeControlEnabled
+    $claudeControlCheck.Add_Click({param($eventSource,$eventData)
+        $script:State.settings.claudeControlEnabled=$eventSource.Checked
+        Save-State
+        Stop-UsageCollection
+        Start-UsageCollection
+        if($null -ne $script:RefreshMainWindow){& $script:RefreshMainWindow}
+    })
+    $settingsPanel.Controls.Add($claudeControlCheck)
+    $codexBucketBox = New-Object System.Windows.Forms.ComboBox
+    $codexBucketBox.DropDownStyle = 'DropDownList'
+    $codexBucketBox.DisplayMember = 'Label'
+    $codexBucketBox.Location = New-Object System.Drawing.Point 390,34
+    $codexBucketBox.Size = New-Object System.Drawing.Size 300,25
+    $codexBucketBox.Add_SelectionChangeCommitted({param($eventSource,$eventData)
+        $script:State.settings.codexLimitId=$eventSource.SelectedItem.Id
+        Save-State
+        Refresh-Tray
+    })
+    $settingsPanel.Controls.Add($codexBucketBox)
+    $bucketLabel = New-Object System.Windows.Forms.Label
+    $bucketLabel.Text = 'Codex allowance shown in the pill'
+    $bucketLabel.Location = New-Object System.Drawing.Point 390,12
+    $bucketLabel.AutoSize=$true
+    $settingsPanel.Controls.Add($bucketLabel)
 
     $quickAddResetButton = New-Object System.Windows.Forms.Button
     $quickAddResetButton.Text = "+ Reset"
@@ -4020,13 +4292,14 @@ function Show-MainWindow {
     $settingsPanel.Controls.Add($usageHint)
 
     $tabs = New-Object System.Windows.Forms.TabControl
-    $tabs.Location = New-Object System.Drawing.Point 20, 194
-    $tabs.Size = New-Object System.Drawing.Size 920, 388
+    $tabs.Location = New-Object System.Drawing.Point 28, 126
+    $tabs.Size = New-Object System.Drawing.Size 984, 572
     $tabs.Anchor = "Top,Bottom,Left,Right"
     $tabs.DrawMode = [System.Windows.Forms.TabDrawMode]::OwnerDrawFixed
     $tabs.SizeMode = [System.Windows.Forms.TabSizeMode]::Fixed
-    $tabs.ItemSize = New-Object System.Drawing.Size 124, 32
+    $tabs.ItemSize = New-Object System.Drawing.Size 136, 40
     $tabs.Padding = New-Object System.Drawing.Point 18, 4
+    $tabs.Font = New-Object System.Drawing.Font "Segoe UI Semibold", 10
     $tabs.Add_DrawItem({
         param($eventSource, $eventData)
 
@@ -4035,7 +4308,7 @@ function Show-MainWindow {
             [System.Drawing.Color]::White
         }
         else {
-            [System.Drawing.Color]::FromArgb(246, 247, 249)
+            [System.Drawing.Color]::FromArgb(245, 244, 241)
         }
         $foreground = if ($isSelected) {
             [System.Drawing.Color]::FromArgb(36, 39, 46)
@@ -4096,6 +4369,27 @@ function Show-MainWindow {
     $resetsTab.UseVisualStyleBackColor = $false
     $tabs.TabPages.Add($resetsTab)
 
+    $detailsTab = New-Object System.Windows.Forms.TabPage
+    $detailsTab.Text = "Details"
+    $detailsTab.BackColor = [System.Drawing.Color]::White
+    $tabs.TabPages.Add($detailsTab)
+    $preferencesTab = New-Object System.Windows.Forms.TabPage
+    $preferencesTab.Text = "Preferences"
+    $preferencesTab.BackColor = [System.Drawing.Color]::White
+    $preferencesTab.AutoScroll = $true
+    $tabs.TabPages.Add($preferencesTab)
+    $settingsPanel.Location = New-Object System.Drawing.Point 12, 12
+    $settingsPanel.Size = New-Object System.Drawing.Size 940, 148
+    $settingsPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+    $settingsPanel.Anchor = 'Top,Left'
+    $onlyCodexCheck.Location = New-Object System.Drawing.Point 16, 78
+    $usageHint.Visible = $false
+    $quickAddResetButton.Visible = $false
+    $quickAddLimitButton.Visible = $false
+    $preferencesTab.Controls.Add($settingsPanel)
+    $preferencesTab.Tag = $settingsPanel
+    $preferencesTab.Add_Resize({ param($eventSource,$eventData) $eventSource.Tag.Width=[Math]::Max(400,$eventSource.ClientSize.Width-40) })
+
     $liveStatusLabel = New-Object System.Windows.Forms.Label
     $liveStatusLabel.Location = New-Object System.Drawing.Point 14, 17
     $liveStatusLabel.Size = New-Object System.Drawing.Size 710, 22
@@ -4121,7 +4415,22 @@ function Show-MainWindow {
     [void]$liveList.Columns.Add("Monthly / credits", 112)
     [void]$liveList.Columns.Add("Plan", 80)
     [void]$liveList.Columns.Add("Status", 96)
-    $liveTab.Controls.Add($liveList)
+    $liveList.Top = 14
+    $detailsTab.Controls.Add($liveList)
+    $usageRows = New-Object System.Windows.Forms.Panel
+    $usageRows.Location = New-Object System.Drawing.Point 18, 60
+    $usageRows.AutoScroll = $true
+    $usageRows.BackColor = [System.Drawing.Color]::White
+    $usageRows.Tag = 'provider-rows'
+    Enable-ControlDoubleBuffering -Control $usageRows
+    $liveTab.Controls.Add($usageRows)
+    $script:UsageProviderRows = @{}
+    foreach ($source in @('codex','claude','antigravity','opencodego','qwen')) {
+        $row = New-UsageProviderRow -Source $source
+        $script:UsageProviderRows[$source] = $row
+        $usageRows.Controls.Add($row.Panel)
+    }
+    $usageRows.Add_Resize({ param($eventSource,$eventData) Update-UsageRowLayout -Container $eventSource })
 
     $resetsList = New-ListView -X 14 -Y 14 -Width 872 -Height 286
     $resetsList.Anchor = "Top,Bottom,Left,Right"
@@ -4253,139 +4562,29 @@ function Show-MainWindow {
     Set-MainWindowButtonStyle -Button $exitButton
     $form.Controls.Add($exitButton)
 
-    $script:RefreshMainWindow = {
-        if ($null -eq $form -or $form.IsDisposed) {
-            return
-        }
+    $utilityY = 176
+    foreach ($button in @($codexSettingsButton,$usageDashboardButton,$openCodeGoButton,$qwenButton,$openDataButton)) {
+        $button.Location = New-Object System.Drawing.Point 28,$utilityY
+        $button.Size = New-Object System.Drawing.Size 220,36
+        $button.Anchor = 'Top,Left'
+        $preferencesTab.Controls.Add($button)
+        $utilityY += 46
+    }
+    $footer = New-Object System.Windows.Forms.Label
+    $footer.Text = 'Click the pill to switch providers. Right-click for actions.'
+    $footer.Location = New-Object System.Drawing.Point 30,720
+    $footer.Size = New-Object System.Drawing.Size 560,24
+    $footer.ForeColor = [System.Drawing.Color]::FromArgb(99,104,117)
+    $footer.Anchor = 'Bottom,Left'
+    $form.Controls.Add($footer)
+    $hideButton.Location = New-Object System.Drawing.Point 820,716
+    $exitButton.Location = New-Object System.Drawing.Point 920,716
+    $script:MainWindowControls = @{ClaudeControl=$claudeControlCheck;QwenEnabled=$qwenEnabledCheck;CodexBucket=$codexBucketBox;Rows=$usageRows;Plan=$planBox;Resets=$resetsList;Limits=$limitsList;Live=$liveList;Header=$header;Status=$liveStatusLabel;Refresh=$refreshLiveButton}
+    $script:RefreshMainWindow = { Update-MainWindow }
 
-        $snapshot = Get-StatusSnapshot
-        $codexState = $(if ($snapshot.CodexRunning) { "active" } else { "inactive" })
-        $resetLabel = $(if ($snapshot.ActiveResetCount -eq 1) { "active reset" } else { "active resets" })
-        $header.Text = "Codex $codexState | $($snapshot.ActiveResetCount) $resetLabel"
-
-        $lastChecked = Format-DisplayDate $script:State.liveUsage.lastCheckedAt
-        $liveStatus = "Last checked: $lastChecked"
-        if (-not [string]::IsNullOrWhiteSpace([string]$script:State.liveUsage.lastError)) {
-            $liveStatus += " | error: $($script:State.liveUsage.lastError)"
-        }
-        elseif ($null -ne $script:State.liveUsage.resetCreditsAvailable) {
-            $liveStatus += " | resets available: $($script:State.liveUsage.resetCreditsAvailable)"
-        }
-        $liveStatusLabel.Text = Limit-Text -Text $liveStatus -MaxLength 130
-
-        $liveList.Items.Clear()
-        foreach ($bucket in @(As-Array $script:State.liveUsage.buckets)) {
-            $bucketName = [string]$bucket.limitName
-            if ([string]::IsNullOrWhiteSpace($bucketName)) {
-                $bucketName = [string]$bucket.limitId
-            }
-            if ([string]::IsNullOrWhiteSpace($bucketName)) {
-                $bucketName = "codex"
-            }
-
-            $item = New-Object System.Windows.Forms.ListViewItem $bucketName
-            [void]$item.SubItems.Add($(if ($null -ne $bucket.primaryRemainingPercent) { "$($bucket.primaryRemainingPercent)%" } else { "-" }))
-            [void]$item.SubItems.Add((Format-ShortDisplayDate $bucket.primaryResetsAt))
-            [void]$item.SubItems.Add($(if ($null -ne $bucket.secondaryRemainingPercent) { "$($bucket.secondaryRemainingPercent)%" } else { "-" }))
-            [void]$item.SubItems.Add((Format-ShortDisplayDate $bucket.secondaryResetsAt))
-            [void]$item.SubItems.Add([string]$bucket.creditsBalance)
-            [void]$item.SubItems.Add([string]$bucket.planType)
-            [void]$item.SubItems.Add([string]$bucket.rateLimitReachedType)
-            $item.Tag = $bucket
-            [void]$liveList.Items.Add($item)
-        }
-
-        $claudeUsage = Get-ClaudeUsageSnapshot
-        $claudeName = "Claude Code"
-        $claudeStatus = "waiting for statusline"
-        if ($null -ne $claudeUsage) {
-            if (-not [string]::IsNullOrWhiteSpace([string]$claudeUsage.modelName)) {
-                $claudeName = "Claude Code ($($claudeUsage.modelName))"
-            }
-            $claudeStatus = $(if (-not [string]::IsNullOrWhiteSpace([string]$claudeUsage.lastError)) { "error" } else { "statusline" })
-        }
-
-        $claudeItem = New-Object System.Windows.Forms.ListViewItem $claudeName
-        [void]$claudeItem.SubItems.Add($(if ($null -ne $claudeUsage -and $null -ne $claudeUsage.fiveHourRemainingPercent) { "$($claudeUsage.fiveHourRemainingPercent)%" } else { "-" }))
-        [void]$claudeItem.SubItems.Add($(if ($null -ne $claudeUsage) { Format-ShortDisplayDate $claudeUsage.fiveHourResetsAt } else { "-" }))
-        [void]$claudeItem.SubItems.Add($(if ($null -ne $claudeUsage -and $null -ne $claudeUsage.sevenDayRemainingPercent) { "$($claudeUsage.sevenDayRemainingPercent)%" } else { "-" }))
-        [void]$claudeItem.SubItems.Add($(if ($null -ne $claudeUsage) { Format-ShortDisplayDate $claudeUsage.sevenDayResetsAt } else { "-" }))
-        [void]$claudeItem.SubItems.Add("")
-        [void]$claudeItem.SubItems.Add($(if ($null -ne $claudeUsage) { [string]$claudeUsage.version } else { "" }))
-        [void]$claudeItem.SubItems.Add($claudeStatus)
-        $claudeItem.Tag = $claudeUsage
-        [void]$liveList.Items.Add($claudeItem)
-
-        $openCodeGoUsage = Get-OpenCodeGoUsageSnapshot
-        $openCodeGoValues = @{}
-        if ($null -ne $openCodeGoUsage) {
-            foreach ($usageItem in @($openCodeGoUsage.items)) {
-                $openCodeGoValues[[string]$usageItem.key] = $usageItem
-            }
-        }
-        $openCodeGoItem = New-Object System.Windows.Forms.ListViewItem "OpenCode Go"
-        $openCodeGoFiveHour = $openCodeGoValues["five_hour"]
-        $openCodeGoWeekly = $openCodeGoValues["seven_day"]
-        $openCodeGoMonthly = $openCodeGoValues["monthly"]
-        [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoFiveHour -and $null -ne $openCodeGoFiveHour.remainingPercent) { "$($openCodeGoFiveHour.remainingPercent)%" } else { "-" }))
-        [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoFiveHour) { Format-ShortDisplayDate $openCodeGoFiveHour.resetsAt } else { "-" }))
-        [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoWeekly -and $null -ne $openCodeGoWeekly.remainingPercent) { "$($openCodeGoWeekly.remainingPercent)%" } else { "-" }))
-        [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoWeekly) { Format-ShortDisplayDate $openCodeGoWeekly.resetsAt } else { "-" }))
-        [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoMonthly -and $null -ne $openCodeGoMonthly.remainingPercent) { "$($openCodeGoMonthly.remainingPercent)%" } else { "-" }))
-        [void]$openCodeGoItem.SubItems.Add("")
-        [void]$openCodeGoItem.SubItems.Add((Get-OpenCodeGoStatusText))
-        $openCodeGoItem.Tag = $openCodeGoUsage
-        [void]$liveList.Items.Add($openCodeGoItem)
-
-        $qwenUsage = Get-QwenUsageSnapshot
-        $qwenValues = @{}
-        if ($null -ne $qwenUsage) {
-            foreach ($usageItem in @($qwenUsage.items)) {
-                $qwenValues[[string]$usageItem.key] = $usageItem
-            }
-        }
-        $qwenItem = New-Object System.Windows.Forms.ListViewItem "Qwen Token Plan"
-        $qwenFiveHour = $qwenValues["five_hour"]
-        $qwenWeekly = $qwenValues["seven_day"]
-        [void]$qwenItem.SubItems.Add($(if ($null -ne $qwenFiveHour -and $null -ne $qwenFiveHour.remainingPercent) { "$($qwenFiveHour.remainingPercent)%" } else { "-" }))
-        [void]$qwenItem.SubItems.Add($(if ($null -ne $qwenFiveHour) { Format-ShortDisplayDate $qwenFiveHour.resetsAt } else { "-" }))
-        [void]$qwenItem.SubItems.Add($(if ($null -ne $qwenWeekly -and $null -ne $qwenWeekly.remainingPercent) { "$($qwenWeekly.remainingPercent)%" } else { "-" }))
-        [void]$qwenItem.SubItems.Add($(if ($null -ne $qwenWeekly) { Format-ShortDisplayDate $qwenWeekly.resetsAt } else { "-" }))
-        [void]$qwenItem.SubItems.Add("")
-        [void]$qwenItem.SubItems.Add("")
-        [void]$qwenItem.SubItems.Add((Get-QwenStatusText))
-        $qwenItem.Tag = $qwenUsage
-        [void]$liveList.Items.Add($qwenItem)
-
-        $resetsList.Items.Clear()
-        foreach ($reset in ($script:State.resets | Sort-Object { Get-DateOrNull ([string]$_.expiresAt) })) {
-            $item = New-Object System.Windows.Forms.ListViewItem ([string]$reset.label)
-            [void]$item.SubItems.Add((Format-DisplayDate $reset.expiresAt))
-            [void]$item.SubItems.Add((Format-TimeLeft $reset.expiresAt))
-            [void]$item.SubItems.Add((Get-ResetStatus $reset))
-            [void]$item.SubItems.Add([string]$reset.notes)
-            $item.Tag = $reset
-            [void]$resetsList.Items.Add($item)
-        }
-
-        $limitsList.Items.Clear()
-        foreach ($limit in $script:State.limits) {
-            $item = New-Object System.Windows.Forms.ListViewItem ([string]$limit.name)
-            [void]$item.SubItems.Add([string]$limit.allowance)
-            [void]$item.SubItems.Add([string]$limit.remaining)
-            [void]$item.SubItems.Add((Format-TimeLeft $limit.resetAt))
-            [void]$item.SubItems.Add([string]$limit.notes)
-            $item.Tag = $limit
-            [void]$limitsList.Items.Add($item)
-        }
-
-        Set-MainWindowListRows -List $liveList
-        Set-MainWindowListRows -List $resetsList
-        Set-MainWindowListRows -List $limitsList
-        Refresh-Tray
-    }.GetNewClosure()
 
     $savePlanButton.Add_Click({
+        $planBox = $script:MainWindowControls.Plan
         $script:State.planName = $planBox.Text.Trim()
         if ([string]::IsNullOrWhiteSpace($script:State.planName)) {
             $script:State.planName = "ChatGPT Pro"
@@ -4396,28 +4595,13 @@ function Show-MainWindow {
     })
 
     $onlyCodexCheck.Add_CheckedChanged({
-        $script:State.settings.showOnlyWhenCodexRuns = $onlyCodexCheck.Checked
+        param($eventSource, $eventData)
+        $script:State.settings.showOnlyWhenCodexRuns = $eventSource.Checked
         Save-State
         Refresh-Tray
     })
 
-    $refreshLiveButton.Add_Click({
-        $refreshLiveButton.Enabled = $false
-        try {
-            [void](Update-LiveUsage)
-            [void](Update-AntigravityUsage)
-            if ([bool]$script:State.settings.openCodeGoEnabled) {
-                Start-OpenCodeGoUsageRefresh
-            }
-            if ([bool]$script:State.settings.qwenTokenPlanEnabled) {
-                Start-QwenUsageRefresh
-            }
-            if ($null -ne $script:RefreshMainWindow) { & $script:RefreshMainWindow }
-        }
-        finally {
-            $refreshLiveButton.Enabled = $true
-        }
-    })
+    $refreshLiveButton.Add_Click({ Start-AllUsageRefresh })
 
     $addResetAction = {
         $newItem = Show-ResetDialog $null
@@ -4432,7 +4616,7 @@ function Show-MainWindow {
     $quickAddResetButton.Add_Click($addResetAction)
 
     $editResetAction = {
-        $selected = Get-SelectedTag $resetsList
+        $selected = Get-SelectedTag $script:MainWindowControls.Resets
         if ($null -eq $selected) {
             Show-Message "Select a reset first."
             return
@@ -4450,7 +4634,7 @@ function Show-MainWindow {
     $resetsList.Add_DoubleClick($editResetAction)
 
     $usedResetButton.Add_Click({
-        $selected = Get-SelectedTag $resetsList
+        $selected = Get-SelectedTag $script:MainWindowControls.Resets
         if ($null -eq $selected) {
             Show-Message "Select a reset first."
             return
@@ -4463,7 +4647,7 @@ function Show-MainWindow {
     })
 
     $deleteResetButton.Add_Click({
-        $selected = Get-SelectedTag $resetsList
+        $selected = Get-SelectedTag $script:MainWindowControls.Resets
         if ($null -eq $selected) {
             Show-Message "Select a reset first."
             return
@@ -4490,7 +4674,7 @@ function Show-MainWindow {
     $quickAddLimitButton.Add_Click($addLimitAction)
 
     $editLimitAction = {
-        $selected = Get-SelectedTag $limitsList
+        $selected = Get-SelectedTag $script:MainWindowControls.Limits
         if ($null -eq $selected) {
             Show-Message "Select a limit first."
             return
@@ -4508,7 +4692,7 @@ function Show-MainWindow {
     $limitsList.Add_DoubleClick($editLimitAction)
 
     $deleteLimitButton.Add_Click({
-        $selected = Get-SelectedTag $limitsList
+        $selected = Get-SelectedTag $script:MainWindowControls.Limits
         if ($null -eq $selected) {
             Show-Message "Select a limit first."
             return
@@ -4560,6 +4744,11 @@ function Show-MainWindow {
         $script:RefreshMainWindow = $null
     })
 
+    foreach ($page in @($liveTab, $limitsTab, $resetsTab, $detailsTab)) {
+        foreach ($control in $page.Controls) { $control.Anchor = 'Top,Left' }
+        $page.Add_Resize({ param($eventSource, $eventData) Update-UsageTabLayout -Page $eventSource })
+        Update-UsageTabLayout -Page $page
+    }
     if ($null -ne $script:RefreshMainWindow) { & $script:RefreshMainWindow }
     $form.Show()
     $form.Activate()
@@ -4575,9 +4764,13 @@ function New-TrayMenu {
     [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
     $openItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $openItem.Text = "Open reset bank"
+    $openItem.Text = "Open usage overview"
     $openItem.Add_Click({ Show-MainWindow })
     [void]$menu.Items.Add($openItem)
+
+    $refreshItem = New-Object System.Windows.Forms.ToolStripMenuItem "Refresh now"
+    $refreshItem.Add_Click({ Start-AllUsageRefresh })
+    [void]$menu.Items.Add($refreshItem)
 
     $addResetItem = New-Object System.Windows.Forms.ToolStripMenuItem
     $addResetItem.Text = "Add reset"
@@ -4642,9 +4835,10 @@ function New-TrayMenu {
     $badgeItem.CheckOnClick = $true
     $badgeItem.Checked = [bool]$script:State.settings.showTaskbarBadge
     $badgeItem.Add_Click({
-        $script:State.settings.showTaskbarBadge = $badgeItem.Checked
+        param($eventSource, $eventData)
+        $script:State.settings.showTaskbarBadge = $eventSource.Checked
         Save-State
-        if ($badgeItem.Checked) {
+        if ($eventSource.Checked) {
             Refresh-TaskbarBadge
         }
         else {
@@ -4658,8 +4852,9 @@ function New-TrayMenu {
     $claudeKeeperItem.CheckOnClick = $true
     $claudeKeeperItem.Checked = [bool]$script:State.settings.keepClaudeCodeAlive
     $claudeKeeperItem.Add_Click({
-        $script:State.settings.keepClaudeCodeAlive = $claudeKeeperItem.Checked
-        if ($claudeKeeperItem.Checked) {
+        param($eventSource, $eventData)
+        $script:State.settings.keepClaudeCodeAlive = $eventSource.Checked
+        if ($eventSource.Checked) {
             Clear-ClaudeKeeperCooldown
         }
         Save-State
@@ -4682,8 +4877,16 @@ function New-TrayMenu {
     $exitItem.Add_Click({ Exit-TrayApp })
     [void]$menu.Items.Add($exitItem)
 
+    $menu.Tag = @{Badge=$badgeItem;Keeper=$claudeKeeperItem;Status=$statusItem;Refresh=$refreshItem}
     $menuOpeningAction = {
+        param($eventSource, $eventData)
+        $badgeItem = $eventSource.Tag.Badge
+        $claudeKeeperItem = $eventSource.Tag.Keeper
+        $statusItem = $eventSource.Tag.Status
+        $refreshItem = $eventSource.Tag.Refresh
         $script:TrayMenuOpen = $true
+        $refreshItem.Enabled = $script:ProviderRefreshes.Count -eq 0
+        $refreshItem.Text = $(if ($refreshItem.Enabled) { "Refresh now" } else { "Refreshing..." })
         $snapshot = Get-StatusSnapshot
         $badgeItem.Checked = [bool]$script:State.settings.showTaskbarBadge
         $claudeKeeperItem.Checked = [bool]$script:State.settings.keepClaudeCodeAlive
@@ -4693,7 +4896,7 @@ function New-TrayMenu {
         }
         $claudeText = if ($snapshot.ClaudeCodeRunning) { "Claude: active" } elseif ($snapshot.ClaudeKeeperEnabled) { "Claude: keeper waiting" } else { "Claude: off" }
         $statusItem.Text = "Codex: $(if ($snapshot.CodexRunning) { "active" } else { "inactive" }) | $claudeText | resets: $($snapshot.ActiveResetCount) | $nextText"
-    }.GetNewClosure()
+    }
     $menu.Add_Opening($menuOpeningAction)
     $menu.Add_Closed({
         $script:TrayMenuOpen = $false
@@ -4703,121 +4906,164 @@ function New-TrayMenu {
     return $menu
 }
 
-function New-OpenCodeGoRefreshStartInfo {
-    $powershellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $startInfo.FileName = $powershellPath
-    $startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -RefreshOpenCodeGoOnce"
-    $startInfo.WorkingDirectory = $PSScriptRoot
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    return $startInfo
+function New-CollectorStartInfo {
+    $info=New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $ownerTicks=(Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks
+    $collector=Join-Path $PSScriptRoot 'Start-UsageCollector.ps1'
+    $info.Arguments="-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$collector`" -OwnerProcessId $PID -OwnerStartTicks $ownerTicks -DataDirectory `"$script:DataDir`""
+    $info.WorkingDirectory=$PSScriptRoot
+    $info.UseShellExecute=$false
+    $info.CreateNoWindow=$true
+    $info.RedirectStandardOutput=$true
+    $info.RedirectStandardError=$true
+    return $info
 }
 
-function Start-OpenCodeGoUsageRefresh {
-    if ($null -eq $script:State -or -not [bool]$script:State.settings.openCodeGoEnabled) { return }
-    if ($null -ne $script:OpenCodeGoRefreshProcess) {
-        try {
-            if (-not $script:OpenCodeGoRefreshProcess.HasExited) { return }
-            $script:OpenCodeGoRefreshProcess.Dispose()
-        }
-        catch {
-        }
-        $script:OpenCodeGoRefreshProcess = $null
-    }
-
+function Start-UsageCollection {
+    if($null -ne $script:CollectorProcess -and -not $script:CollectorProcess.HasExited){return}
+    if((Get-Date) -lt $script:CollectorRestartAt){return}
     try {
-        $script:OpenCodeGoRefreshProcess = [System.Diagnostics.Process]::Start((New-OpenCodeGoRefreshStartInfo))
-    }
-    catch {
-        $script:OpenCodeGoRefreshProcess = $null
+        if($null -ne $script:CollectorProcess){$script:CollectorProcess.Dispose()}
+        $script:CollectorProcess=[Diagnostics.Process]::Start((New-CollectorStartInfo))
+        $script:CollectorStatus='Running'
+        if($script:CollectorProcess.StartInfo.RedirectStandardError){$script:CollectorErrorDrain=$script:CollectorProcess.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)}
+        if($script:CollectorProcess.StartInfo.RedirectStandardOutput){$script:CollectorOutputDrain=$script:CollectorProcess.StandardOutput.BaseStream.CopyToAsync([IO.Stream]::Null)}
+    } catch {$script:CollectorProcess=$null;$script:CollectorRestartAt=(Get-Date).AddSeconds(30)}
+}
+
+function Stop-UsageCollection {
+    if($null -ne $script:CollectorProcess){Stop-OwnedRefreshProcess $script:CollectorProcess;$script:CollectorProcess=$null}
+    $script:ProviderRefreshes.Clear()
+}
+
+function Start-UsageMonitoring {
+    Ensure-DataDirectory
+    if(-not ('UtpUsageFileMonitor' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'UsageFileMonitor.cs')}
+    $script:UsageMonitor=New-Object UtpUsageFileMonitor $script:DataDir
+    foreach($package in @(Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'Packages') -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue)) {
+        $directory=Join-Path $package.FullName 'LocalCache\Roaming\Claude'
+        $script:UsageMonitor.Watch($directory,'plan-usage-history.json')
     }
 }
 
-function Update-OpenCodeGoRefreshProcessState {
-    if ($null -eq $script:OpenCodeGoRefreshProcess) { return }
+function Get-ProviderCachePath {
+    param([string]$Source)
+    switch($Source){'codex'{$script:CodexUsagePath} 'claude'{$script:ClaudeControlUsagePath} 'antigravity'{$script:AntigravityUsagePath} 'opencodego'{$script:OpenCodeGoUsagePath} 'qwen'{$script:QwenUsagePath}}
+}
+
+function Sync-CodexUsageSnapshot {
+    if (-not (Test-Path -LiteralPath $script:CodexUsagePath)) { return }
     try {
-        if (-not $script:OpenCodeGoRefreshProcess.HasExited) { return }
-        $script:OpenCodeGoRefreshProcess.Dispose()
+        $usage = Get-Content -LiteralPath $script:CodexUsagePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($null -ne $usage -and $usage.source -eq 'codex-app-server') { $script:State.liveUsage = $usage }
+    } catch { $script:State.liveUsage.lastError = 'The Codex usage cache could not be read.' }
+}
+
+function Set-ProviderRefreshFailure {
+    param([string]$Source, [string]$Message)
+    $script:ProviderRefreshErrors[$Source] = $Message
+    try { switch ($Source) {
+        'codex' {
+            $script:State.liveUsage.lastError='network_error'
+            $script:State.liveUsage.lastCheckedAt=Format-DateForStorage (Get-Date)
+            Write-OpenCodeGoJsonAtomically -Path $script:CodexUsagePath -Value $script:State.liveUsage -MutexName 'UsageTrayPillCodexUsageWrite'
+        }
+        'claude' { Write-OpenCodeGoJsonAtomically -Path $script:ClaudeControlUsagePath -Value ([pscustomobject]@{source='claude-code-control';lastCheckedAt=Format-DateForStorage (Get-Date);lastError=$Message;errorCode='network_error';available=$false;items=@()}) -MutexName 'UsageTrayPillClaudeControlUsageWrite' }
+        'antigravity' { Write-AntigravityUsageSnapshot ([pscustomobject]@{source='antigravity-language-server';lastCheckedAt=Format-DateForStorage (Get-Date);lastError=$Message;available=$false;items=@()}) }
+        'opencodego' { Set-OpenCodeGoFailureSnapshot -Code network_error -Message $Message }
+        'qwen' { Set-QwenFailureSnapshot -Code network_error -Message $Message }
+    } } catch { } # Keep the in-memory error visible even if the cache cannot be written.
+}
+
+function Get-ProviderCacheVersion {
+    param([string]$Source)
+    $path = switch ($Source) {
+        'codex' { $script:CodexUsagePath }
+        'claude' { $script:ClaudeControlUsagePath }
+        'antigravity' { $script:AntigravityUsagePath }
+        'opencodego' { $script:OpenCodeGoUsagePath }
+        'qwen' { $script:QwenUsagePath }
     }
-    catch {
+    $file = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
+    if ($null -eq $file) { return 0L }
+    return $file.LastWriteTimeUtc.Ticks
+}
+
+function Stop-OwnedRefreshProcess {
+    param([System.Diagnostics.Process]$Process)
+    if ($null -eq $Process) { return }
+    try {
+        if (-not $Process.HasExited) {
+            # Kill only this worker's descendants, discovered before its parent exits.
+            foreach ($childId in @(Get-DescendantProcessIds @($Process.Id))) {
+                Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue
+            }
+            $Process.Kill()
+            [void]$Process.WaitForExit(2000)
+        }
+    } catch {} finally { $Process.Dispose() }
+}
+
+function Start-ProviderUsageRefresh {
+    param([ValidateSet('codex','claude','antigravity','opencodego','qwen')][string]$Source)
+    if($Source -eq 'opencodego' -and -not $script:State.settings.openCodeGoEnabled){return}
+    if($Source -eq 'qwen' -and -not $script:State.settings.qwenTokenPlanEnabled){return}
+    if($Source -eq 'claude' -and -not $script:State.settings.claudeControlEnabled){return}
+    if($script:ProviderRefreshes.ContainsKey($Source)){return}
+    $path=Join-Path $script:DataDir 'refresh-requests.json'
+    $requests=[pscustomobject]@{}
+    try{if(Test-Path $path){$requests=Get-Content $path -Raw|ConvertFrom-Json}}catch{}
+    $requests|Add-Member -NotePropertyName $Source -NotePropertyValue ([guid]::NewGuid().ToString('N')) -Force
+    $version=Get-ProviderCacheVersion -Source $Source
+    Write-OpenCodeGoJsonAtomically -Path $path -Value $requests -MutexName 'UsageTrayPillRefreshRequests'
+    $script:ProviderRefreshes[$Source]=[pscustomobject]@{StartedAt=Get-Date;CacheVersion=$version}
+    $script:ProviderRefreshErrors.Remove($Source)
+    Start-UsageCollection
+}
+
+function Update-ProviderRefreshProcessState {
+    $changed=$false
+    foreach($source in @($script:ProviderRefreshes.Keys)){
+        $request=$script:ProviderRefreshes[$source]
+        if($null -eq $request){continue}
+        if((Get-ProviderCacheVersion $source) -gt $request.CacheVersion){
+            $script:ProviderRefreshes.Remove($source);$script:ProviderRefreshErrors.Remove($source);$changed=$true
+            if($source -eq 'codex'){Sync-CodexUsageSnapshot}
+        }elseif(((Get-Date)-$request.StartedAt).TotalSeconds -ge 45){
+            $script:ProviderRefreshes.Remove($source)
+            Stop-UsageCollection
+            Set-ProviderRefreshFailure -Source $source -Message 'Refresh timed out. Try again.'
+            $changed=$true
+        }
     }
-    $script:OpenCodeGoRefreshProcess = $null
+    if($null -ne $script:CollectorProcess -and $script:CollectorProcess.HasExited){
+        $script:CollectorProcess.Dispose();$script:CollectorProcess=$null
+        $script:CollectorRestartAt=(Get-Date).AddSeconds(30)
+        $script:CollectorStatus='Reconnecting...'
+        $changed=$true
+    }
+    Start-UsageCollection
+    if($changed){Refresh-Tray;if($null -ne $script:RefreshMainWindow){& $script:RefreshMainWindow}}
+}
+
+function Stop-ProviderUsageRefresh {
+    param([string]$Source)
+    # Stop the collector to cancel any in-flight request before disabling/removing credentials.
+    Stop-UsageCollection
+    $script:ProviderRefreshErrors.Remove($Source)
+}
+
+function Start-AllUsageRefresh {
+    foreach ($source in @('codex','claude','antigravity','opencodego','qwen')) { Start-ProviderUsageRefresh -Source $source }
+    Refresh-Tray
     if ($null -ne $script:RefreshMainWindow) { & $script:RefreshMainWindow }
 }
 
-function Stop-OpenCodeGoUsageRefresh {
-    if ($null -eq $script:OpenCodeGoRefreshProcess) { return }
-    try {
-        if (-not $script:OpenCodeGoRefreshProcess.HasExited) {
-            $script:OpenCodeGoRefreshProcess.Kill()
-            [void]$script:OpenCodeGoRefreshProcess.WaitForExit(3000)
-        }
-        $script:OpenCodeGoRefreshProcess.Dispose()
-    }
-    catch {
-    }
-    $script:OpenCodeGoRefreshProcess = $null
-}
-
-function New-QwenRefreshStartInfo {
-    $powershellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $startInfo.FileName = $powershellPath
-    $startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -RefreshQwenOnce"
-    $startInfo.WorkingDirectory = $PSScriptRoot
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    return $startInfo
-}
-
-function Start-QwenUsageRefresh {
-    if ($null -eq $script:State -or -not [bool]$script:State.settings.qwenTokenPlanEnabled) { return }
-    if ($null -ne $script:QwenRefreshProcess) {
-        try {
-            if (-not $script:QwenRefreshProcess.HasExited) { return }
-            $script:QwenRefreshProcess.Dispose()
-        }
-        catch {
-        }
-        $script:QwenRefreshProcess = $null
-    }
-
-    try {
-        $script:QwenRefreshProcess = [System.Diagnostics.Process]::Start((New-QwenRefreshStartInfo))
-    }
-    catch {
-        $script:QwenRefreshProcess = $null
-    }
-}
-
-function Update-QwenRefreshProcessState {
-    if ($null -eq $script:QwenRefreshProcess) { return }
-    try {
-        if (-not $script:QwenRefreshProcess.HasExited) { return }
-        $script:QwenRefreshProcess.Dispose()
-    }
-    catch {
-    }
-    $script:QwenRefreshProcess = $null
-    if ($null -ne $script:RefreshMainWindow) { & $script:RefreshMainWindow }
-}
-
-function Stop-QwenUsageRefresh {
-    if ($null -eq $script:QwenRefreshProcess) { return }
-    try {
-        if (-not $script:QwenRefreshProcess.HasExited) {
-            $script:QwenRefreshProcess.Kill()
-            [void]$script:QwenRefreshProcess.WaitForExit(3000)
-        }
-        $script:QwenRefreshProcess.Dispose()
-    }
-    catch {
-    }
-    $script:QwenRefreshProcess = $null
-}
+function Start-OpenCodeGoUsageRefresh { Start-ProviderUsageRefresh -Source opencodego }
+function Stop-OpenCodeGoUsageRefresh { Stop-ProviderUsageRefresh -Source opencodego }
+function Start-QwenUsageRefresh { Start-ProviderUsageRefresh -Source qwen }
+function Stop-QwenUsageRefresh { Stop-ProviderUsageRefresh -Source qwen }
 
 function Start-TrayApp {
     $createdNew = $false
@@ -4836,13 +5082,10 @@ function Start-TrayApp {
     $openCodeGoTimer = $null
     $qwenTimer = $null
     try {
-        Load-State | Out-Null
         Ensure-ClaudeUsageKeeper
 
-        if ([bool]$script:State.settings.autoPollLiveUsage) {
-            [void](Update-LiveUsage)
-        }
-        [void](Update-AntigravityUsage)
+        Start-UsageCollection
+        Start-UsageMonitoring
 
     $script:NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
     $script:NotifyIcon.ContextMenuStrip = New-TrayMenu
@@ -4861,8 +5104,6 @@ function Start-TrayApp {
     })
 
     Refresh-Tray
-    Start-OpenCodeGoUsageRefresh
-    Start-QwenUsageRefresh
 
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 60000
@@ -4877,8 +5118,20 @@ function Start-TrayApp {
     $badgeKeepAliveTimer = New-Object System.Windows.Forms.Timer
     $badgeKeepAliveTimer.Interval = 500
     $badgeKeepAliveTimer.Add_Tick({
-        Update-OpenCodeGoRefreshProcessState
-        Update-QwenRefreshProcessState
+        Update-ProviderRefreshProcessState
+        if ($null -ne $script:UsageMonitor -and $script:UsageMonitor.ConsumeChanges()) {
+            foreach($name in $script:UsageMonitor.TakeChangedFiles()) {
+                foreach($source in @('codex','claude','antigravity','opencodego','qwen')) {
+                    if($name -eq '*' -or $name -eq [IO.Path]::GetFileName((Get-ProviderCachePath $source))){$script:ProviderRefreshErrors.Remove($source)}
+                }
+            }
+            Sync-CodexUsageSnapshot
+            Refresh-Tray
+            if ($null -ne $script:RefreshMainWindow) { & $script:RefreshMainWindow }
+        }
+        if ($script:PendingStateSave -and -not $script:BadgeAnimating) {
+            try { Save-State; $script:PendingStateSave = $false } catch { }
+        }
         if ([bool]$script:State.settings.showTaskbarBadge) {
             Refresh-TaskbarBadge -GeometryOnly
         }
@@ -4891,52 +5144,6 @@ function Start-TrayApp {
         Ensure-ClaudeUsageKeeper
     })
     $claudeKeeperTimer.Start()
-
-    $usageTimer = New-Object System.Windows.Forms.Timer
-    $pollMinutes = 5
-    try {
-        $pollMinutes = [Math]::Max(1, [int]$script:State.settings.liveUsagePollIntervalMinutes)
-    }
-    catch {
-        $pollMinutes = 5
-    }
-    $usageTimer.Interval = [Math]::Min(2147483647, $pollMinutes * 60000)
-    $usageTimer.Add_Tick({
-        if ([bool]$script:State.settings.autoPollLiveUsage) {
-            [void](Update-LiveUsage)
-            Refresh-Tray
-            if ($null -ne $script:RefreshMainWindow) {
-                & $script:RefreshMainWindow
-            }
-        }
-    })
-    $usageTimer.Start()
-
-    $antigravityTimer = New-Object System.Windows.Forms.Timer
-    $antigravityTimer.Interval = 90000
-    $antigravityTimer.Add_Tick({
-        [void](Update-AntigravityUsage)
-        Refresh-TaskbarBadge
-    })
-    $antigravityTimer.Start()
-
-    $openCodeGoTimer = New-Object System.Windows.Forms.Timer
-    $openCodeGoTimer.Interval = 90000
-    $openCodeGoTimer.Add_Tick({
-        if ([bool]$script:State.settings.openCodeGoEnabled) {
-            Start-OpenCodeGoUsageRefresh
-        }
-    })
-    $openCodeGoTimer.Start()
-
-    $qwenTimer = New-Object System.Windows.Forms.Timer
-    $qwenTimer.Interval = $script:QwenRefreshIntervalMilliseconds
-    $qwenTimer.Add_Tick({
-        if ([bool]$script:State.settings.qwenTokenPlanEnabled) {
-            Start-QwenUsageRefresh
-        }
-    })
-    $qwenTimer.Start()
 
     if ($OpenEditor) {
         Show-MainWindow
@@ -4961,8 +5168,10 @@ function Start-TrayApp {
             }
         }
 
-        Stop-OpenCodeGoUsageRefresh
-        Stop-QwenUsageRefresh
+        Stop-UsageCollection
+        if ($null -ne $script:UsageMonitor) { $script:UsageMonitor.Dispose();$script:UsageMonitor=$null }
+        if ($script:PendingStateSave) { try { Save-State } catch {} }
+        Dispose-TaskbarBadge
         Stop-ClaudeUsageKeeper
         if ($null -ne $script:NotifyIcon) {
             try {
@@ -5011,7 +5220,7 @@ function Invoke-SelfTest {
     Assert-SelfTest ($hiddenBadgeLogoLocation.X -eq 0 -and $hiddenBadgeLogoLocation.Y -eq -(ConvertTo-BadgePixels 22)) "the hidden provider logo must sit above the pill without a New-Object argument error"
     $mainScriptSource = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "Start-UsageTrayPill.ps1"))
     Assert-SelfTest ($mainScriptSource -notmatch '(?m)^\s*function\s+Refresh-WindowLists\b') "main-window refresh must not depend on a function scoped to Show-MainWindow"
-    Assert-SelfTest ($mainScriptSource -match '(?s)\$script:RefreshMainWindow\s*=\s*\{.*?\}\.GetNewClosure\(\)') "main-window refresh must retain its controls in a closure"
+    Assert-SelfTest ($null -ne (Get-Command Update-MainWindow -ErrorAction SilentlyContinue)) "main-window refresh must use the live script state and retained controls"
     Assert-SelfTest ($mainScriptSource -match '(?s)\$timer\.Add_Tick\(\{.*?&\s+\$script:RefreshMainWindow') "the post-return timer callback must invoke the retained refresh closure"
     Assert-SelfTest ($mainScriptSource -match '\$title\.Text\s*=\s*"Usage overview"') "the main window must expose a clear visual title"
     Assert-SelfTest ($mainScriptSource -match '\$tabs\.DrawMode\s*=\s*\[System\.Windows\.Forms\.TabDrawMode\]::OwnerDrawFixed') "the main window must use the styled tab treatment"
@@ -5092,39 +5301,7 @@ function Invoke-SelfTest {
     Assert-SelfTest (Test-CodexAppProcess $chatGptProcess) "the new ChatGPT process name must count as the Codex app"
     Assert-SelfTest (-not (Test-CodexAppProcess $unrelatedProcess)) "an unrelated process must not count as the Codex app"
 
-    Assert-SelfTest ($null -ne (Get-Command New-OpenCodeGoRefreshStartInfo -ErrorAction SilentlyContinue)) "the OpenCode Go refresh start-info helper must exist"
-    $openCodeGoRefreshStartInfo = New-OpenCodeGoRefreshStartInfo
-    Assert-SelfTest ($openCodeGoRefreshStartInfo.FileName -eq (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe")) "OpenCode Go refresh must use an absolute PowerShell path"
-    Assert-SelfTest ($openCodeGoRefreshStartInfo.Arguments -match "-RefreshOpenCodeGoOnce") "OpenCode Go refresh must only start one-time refresh mode"
-    Assert-SelfTest ($openCodeGoRefreshStartInfo.CreateNoWindow -and $openCodeGoRefreshStartInfo.WindowStyle -eq [System.Diagnostics.ProcessWindowStyle]::Hidden) "OpenCode Go refresh must start hidden"
-    Assert-SelfTest ($null -ne (Get-Command New-QwenRefreshStartInfo -ErrorAction SilentlyContinue)) "the Qwen refresh start-info helper must exist"
-    $qwenRefreshStartInfo = New-QwenRefreshStartInfo
-    Assert-SelfTest ($qwenRefreshStartInfo.FileName -eq (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe")) "Qwen refresh must use an absolute PowerShell path"
-    Assert-SelfTest ($qwenRefreshStartInfo.Arguments -match "-RefreshQwenOnce") "Qwen refresh must only start one-time refresh mode"
-    Assert-SelfTest ($qwenRefreshStartInfo.CreateNoWindow -and $qwenRefreshStartInfo.WindowStyle -eq [System.Diagnostics.ProcessWindowStyle]::Hidden) "Qwen refresh must start hidden"
-    Assert-SelfTest ($script:QwenRefreshIntervalMilliseconds -eq 120000) "Qwen must refresh automatically every two minutes"
-
-    $oldRefreshTestState = $script:State
-    $oldOpenCodeGoRefreshProcess = $script:OpenCodeGoRefreshProcess
-    $oldQwenRefreshProcess = $script:QwenRefreshProcess
-    try {
-        $script:State = New-DefaultState
-        $script:State.settings.openCodeGoEnabled = $true
-        $script:State.settings.qwenTokenPlanEnabled = $true
-        $openCodeGoInFlight = [pscustomobject]@{ HasExited = $false }
-        $qwenInFlight = [pscustomobject]@{ HasExited = $false }
-        $script:OpenCodeGoRefreshProcess = $openCodeGoInFlight
-        $script:QwenRefreshProcess = $qwenInFlight
-        Start-OpenCodeGoUsageRefresh
-        Start-QwenUsageRefresh
-        Assert-SelfTest ([object]::ReferenceEquals($script:OpenCodeGoRefreshProcess, $openCodeGoInFlight)) "OpenCode Go must not start a second refresh while a helper is active"
-        Assert-SelfTest ([object]::ReferenceEquals($script:QwenRefreshProcess, $qwenInFlight)) "Qwen must not start a second refresh while a helper is active"
-    }
-    finally {
-        $script:State = $oldRefreshTestState
-        $script:OpenCodeGoRefreshProcess = $oldOpenCodeGoRefreshProcess
-        $script:QwenRefreshProcess = $oldQwenRefreshProcess
-    }
+    # Worker overlap and completion are covered by Test-UtpReliability.ps1.
 
     Assert-SelfTest ($null -ne (Get-Command Get-CodexIconCandidatePaths -ErrorAction SilentlyContinue)) "the Codex/ChatGPT icon helper must exist"
     $chatGptIconCandidates = @(Get-CodexIconCandidatePaths -AppDirectory "C:\Program Files\WindowsApps\OpenAI.Codex_2.0.0.0_x64__test\app")
@@ -5191,55 +5368,7 @@ function Invoke-SelfTest {
     }
     Assert-SelfTest (Test-ClaudeUsageNeedsDesktopFallback $failedClaudeStatuslineFixture) "a failed Claude statusline snapshot must use the Desktop fallback"
 
-    Assert-SelfTest ((ConvertTo-OpenCodeGoWorkspaceId "wrk_TEST123") -eq "wrk_TEST123") "the OpenCode Go workspace ID must be accepted"
-    Assert-SelfTest ((ConvertTo-OpenCodeGoWorkspaceId "https://opencode.ai/workspace/wrk_TEST123/go") -eq "wrk_TEST123") "the OpenCode Go dashboard URL must be normalized to a workspace ID"
-    Assert-SelfTest ((ConvertTo-OpenCodeGoAuthCookie "auth=test-cookie-value; Path=/") -eq "test-cookie-value") "the auth cookie header must be normalized to its value only"
-    $openCodeGoCrLfRejected = $false
-    try { [void](ConvertTo-OpenCodeGoAuthCookie "value`r`nInjected: yes") } catch { $openCodeGoCrLfRejected = $true }
-    Assert-SelfTest $openCodeGoCrLfRejected "an OpenCode Go cookie with header injection must be rejected"
-
-    $escapedOpenCodeGoFixture = '<script>self.__next_f.push([1,"{\"rollingUsage\":{\"usagePercent\":12.5,\"resetInSec\":3600},\"weeklyUsage\":{\"usagePercent\":25,\"resetInSec\":7200},\"monthlyUsage\":{\"usagePercent\":44,\"resetInSec\":10800}}"])</script>'
-    $escapedOpenCodeGoUsage = @(ConvertFrom-OpenCodeGoDashboardHtml $escapedOpenCodeGoFixture)
-    Assert-SelfTest ($escapedOpenCodeGoUsage.Count -eq 3) "the escaped OpenCode Go dashboard must produce three quotas"
-    Assert-SelfTest (($escapedOpenCodeGoUsage.label -join ",") -eq "5h,weekly,monthly") "OpenCode Go quotas must appear in a fixed order"
-    Assert-SelfTest (($escapedOpenCodeGoUsage.remainingPercent -join ",") -eq "88,75,56") "OpenCode Go used percentages must be converted to remaining percentages"
-
-    $solidOpenCodeGoFixture = '$R[24]($R[18],$R[30]={rollingUsage:$R[31]={status:"ok",resetInSec:18000,usagePercent:0},weeklyUsage:$R[32]={status:"ok",usagePercent:33.4,resetInSec:80000},monthlyUsage:$R[33]={status:"ok",resetInSec:200000,usagePercent:99.6}});'
-    $solidOpenCodeGoUsage = @(ConvertFrom-OpenCodeGoDashboardHtml $solidOpenCodeGoFixture)
-    Assert-SelfTest ($solidOpenCodeGoUsage.Count -eq 3) "the Solid resource dashboard must produce three quotas"
-    Assert-SelfTest (($solidOpenCodeGoUsage.remainingPercent -join ",") -eq "100,67,0") "Solid resource percentages must be rounded correctly"
-
-    $partialOpenCodeGoUsage = @(ConvertFrom-OpenCodeGoDashboardHtml '{"weeklyUsage":{"usagePercent":10,"resetInSec":60}}')
-    Assert-SelfTest ($partialOpenCodeGoUsage.Count -eq 1 -and $partialOpenCodeGoUsage[0].key -eq "seven_day") "a partial OpenCode Go response must retain usable windows"
-    $malformedOpenCodeGoRejected = $false
-    try { [void](ConvertFrom-OpenCodeGoDashboardHtml '<html>signed in but no quota</html>') } catch {
-        $malformedOpenCodeGoRejected = ((Get-OpenCodeGoExceptionCode $_) -eq "parse_error")
-    }
-    Assert-SelfTest $malformedOpenCodeGoRejected "unknown OpenCode Go markup must result in parse_error"
-
-    $oldOpenCodeGoCredentialPath = $script:OpenCodeGoCredentialPath
-    $oldOpenCodeGoEnvironmentWorkspace = $env:OPENCODE_GO_WORKSPACE_ID
-    $oldOpenCodeGoEnvironmentAuth = $env:OPENCODE_GO_AUTH_COOKIE
-    $tempOpenCodeGoCredentialPath = Join-Path ([System.IO.Path]::GetTempPath()) ("opencode-go-credentials-" + [Guid]::NewGuid().ToString("N") + ".json")
-    try {
-        $env:OPENCODE_GO_WORKSPACE_ID = $null
-        $env:OPENCODE_GO_AUTH_COOKIE = $null
-        $script:OpenCodeGoCredentialPath = $tempOpenCodeGoCredentialPath
-        $testOpenCodeGoSecret = "selftest-secret-" + [Guid]::NewGuid().ToString("N")
-        Save-OpenCodeGoCredentials -WorkspaceId "wrk_TEST123" -AuthCookie $testOpenCodeGoSecret
-        $storedOpenCodeGoCredential = Get-Content -LiteralPath $tempOpenCodeGoCredentialPath -Raw
-        Assert-SelfTest ($storedOpenCodeGoCredential -notmatch [regex]::Escape($testOpenCodeGoSecret)) "the OpenCode Go cookie must not be stored as plaintext"
-        $roundTripOpenCodeGoCredential = Get-OpenCodeGoCredentials
-        Assert-SelfTest ($roundTripOpenCodeGoCredential.workspaceId -eq "wrk_TEST123") "the DPAPI credential round trip must retain the workspace"
-        Assert-SelfTest ($roundTripOpenCodeGoCredential.authCookie -eq $testOpenCodeGoSecret) "the DPAPI credential round trip must restore the cookie"
-        Assert-SelfTest ($roundTripOpenCodeGoCredential.source -eq "dpapi") "a locally stored credential must be identifiable as a DPAPI source"
-    }
-    finally {
-        $script:OpenCodeGoCredentialPath = $oldOpenCodeGoCredentialPath
-        $env:OPENCODE_GO_WORKSPACE_ID = $oldOpenCodeGoEnvironmentWorkspace
-        $env:OPENCODE_GO_AUTH_COOKIE = $oldOpenCodeGoEnvironmentAuth
-        Remove-Item -LiteralPath $tempOpenCodeGoCredentialPath -Force -ErrorAction SilentlyContinue
-    }
+    # OpenCode API and credential migration are tested by Test-OpenCodeGoApi.ps1.
 
     $testQwenCookie = "login_qwencloud_ticket=selftest-ticket; login_aliyunid_pk=123; cna=selftest"
     Assert-SelfTest ((ConvertTo-QwenCookieHeader "Cookie: $testQwenCookie") -eq $testQwenCookie) "the Qwen Cookie header must be normalized"
@@ -5253,8 +5382,7 @@ function Invoke-SelfTest {
     $limitedReaderBytes = [System.Text.Encoding]::UTF8.GetBytes("bounded")
     foreach ($readerTest in @(
         [pscustomobject]@{ Name = "OpenCode Go"; Command = { param($stream) Read-OpenCodeGoLimitedUtf8Stream -Stream $stream -MaximumBytes 7 } },
-        [pscustomobject]@{ Name = "Qwen"; Command = { param($stream) Read-QwenLimitedUtf8Stream -Stream $stream -MaximumBytes 7 } },
-        [pscustomobject]@{ Name = "Antigravity"; Command = { param($stream) Read-AntigravityLimitedUtf8Stream -Stream $stream -MaximumBytes 7 } }
+        [pscustomobject]@{ Name = "Qwen"; Command = { param($stream) Read-QwenLimitedUtf8Stream -Stream $stream -MaximumBytes 7 } }
     )) {
         $exactStream = New-Object System.IO.MemoryStream (,$limitedReaderBytes)
         try {
@@ -5288,7 +5416,7 @@ function Invoke-SelfTest {
         per1WeekResetTime = $qwenResetWeekly
     }))
     Assert-SelfTest (($qwenDirectUsage.label -join ",") -eq "5h,weekly") "Qwen quotas must appear in a fixed order"
-    Assert-SelfTest (($qwenDirectUsage.remainingPercent -join ",") -eq "51,85") "Qwen consumed fractions must be converted to remaining percentages"
+    Assert-SelfTest ([Math]::Abs($qwenDirectUsage[0].remainingPercent - 50.9) -lt 0.001 -and [Math]::Abs($qwenDirectUsage[1].remainingPercent - 84.5) -lt 0.001) "Qwen consumed fractions must preserve remaining precision"
     $qwenWrappedUsage = @(ConvertFrom-QwenUsageResponse ([pscustomobject]@{
         data = [pscustomobject]@{
             DataV2 = [pscustomobject]@{
@@ -5338,32 +5466,17 @@ function Invoke-SelfTest {
         Remove-Item -LiteralPath $tempQwenCredentialPath -Force -ErrorAction SilentlyContinue
     }
 
-    $antigravityFixture = [pscustomobject]@{
-        userStatus = [pscustomobject]@{
-            email = 'must-not-be-persisted@example.test'
-            csrfToken = 'must-not-be-persisted'
-            cascadeModelConfigData = [pscustomobject]@{
-                clientModelConfigs = @(
-                    [pscustomobject]@{ label = 'Gemini 3.1 Pro High'; quotaInfo = [pscustomobject]@{ remainingFraction = 0.91; resetTime = '2099-01-01T12:00:00Z' } },
-                    [pscustomobject]@{ label = 'Gemini 3.1 Pro Low'; quotaInfo = [pscustomobject]@{ remainingFraction = 0.94; resetTime = '2099-01-01T12:00:00Z' } },
-                    [pscustomobject]@{ label = 'Claude Sonnet 4.6 Thinking'; quotaInfo = [pscustomobject]@{ remainingFraction = 1; resetTime = '2099-01-01T13:00:00Z' } },
-                    [pscustomobject]@{ label = 'GPT-OSS 120B Medium'; quotaInfo = [pscustomobject]@{ remainingFraction = 1; resetTime = '2099-01-01T13:00:00Z' } }
-                )
-            }
-        }
+    $normalizedAntigravityUsage = [pscustomobject]@{
+        source='antigravity-cli';lastCheckedAt=Format-DateForStorage (Get-Date);available=$true;lastError=''
+        items=@([pscustomobject]@{key='fixture-a';label='Gemini';remainingPercent=91;resetsAt=''},[pscustomobject]@{key='fixture-b';label='Other';remainingPercent=100;resetsAt=''})
     }
-    $normalizedAntigravityUsage = Convert-AntigravityStatusToUsage -StatusResponse $antigravityFixture
-    Assert-SelfTest (@($normalizedAntigravityUsage.items).Count -eq 2) "shared Antigravity quotas must be combined"
-    Assert-SelfTest ($normalizedAntigravityUsage.items[0].label -eq 'Gemini') "Gemini must be the first Antigravity group"
-    Assert-SelfTest ($normalizedAntigravityUsage.items[0].remainingPercent -eq 91) "the conservatively lowest Gemini quota must be used (actual: $($normalizedAntigravityUsage.items[0].remainingPercent))"
-    Assert-SelfTest ($normalizedAntigravityUsage.items[1].label -eq 'Other') "shared Claude/GPT quotas must be shown as Other"
-    $normalizedAntigravityJson = $normalizedAntigravityUsage | ConvertTo-Json -Depth 6
-    Assert-SelfTest ($normalizedAntigravityJson -notmatch 'must-not-be-persisted') "Antigravity account and token details must not enter cache data"
 
     $oldSelfTestState = $script:State
     try {
         $script:State = New-DefaultState
         $script:State.liveUsage = [pscustomobject]@{
+            lastCheckedAt = Format-DateForStorage (Get-Date)
+            lastError = ""
             buckets = @(
                 [pscustomobject]@{
                     limitId = "codex"
@@ -5724,12 +5837,21 @@ function Invoke-SelfTest {
     Write-Host "Self-test OK"
 }
 
+if ($LibraryOnly) { return }
+
 if ($SelfTest) {
     Invoke-SelfTest
     exit 0
 }
 
-Load-State | Out-Null
+try { Load-State | Out-Null }
+catch {
+    if (-not ($RefreshLiveOnce -or $RefreshAntigravityOnce -or $RefreshOpenCodeGoOnce -or $RefreshQwenOnce -or $Validate)) {
+        Show-Message -Text 'UTP could not read its saved settings. Your data has not been changed. Check data.json in the UsageTrayPill data folder and try again.'
+    }
+    exit 1
+}
+Sync-CodexUsageSnapshot
 
 if ($Validate) {
     $snapshot = Get-StatusSnapshot
@@ -5751,7 +5873,7 @@ if ($RefreshLiveOnce) {
 }
 
 if ($RefreshAntigravityOnce) {
-    $ok = Update-AntigravityUsage
+    $ok = Update-AntigravityCliUsage
     $usage = Get-AntigravityUsageSnapshot
     Write-Host "Antigravity refresh: $ok"
     if ($null -ne $usage -and [bool]$usage.available) {
