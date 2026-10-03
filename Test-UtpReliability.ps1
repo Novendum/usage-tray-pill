@@ -42,10 +42,11 @@ try {
     Check ($null -eq $claude.fiveHourRemainingPercent -and $claude.sevenDayRemainingPercent -eq 70) 'One expired Claude window must not clear a still-valid weekly window'
     foreach ($provider in @('OpenCodeGo','Qwen')) {
         $path = if ($provider -eq 'Qwen') { $script:QwenUsagePath } else { $script:OpenCodeGoUsagePath }
-        @{available=$true;stale=$true;lastSuccessAt=(Get-Date).AddHours(-1).ToString('o');items=@(@{key='five_hour';remainingPercent=7;resetsAt=(Get-Date).AddMinutes(-30).ToString('o')})} | ConvertTo-Json -Depth 6 | Set-Content $path
+        $revision=Get-UtpCredentialRevision $(if($provider -eq 'Qwen'){'qwen'}else{'opencodego'})
+        @{credentialRevision=$revision;available=$true;stale=$true;lastSuccessAt=(Get-Date).AddHours(-1).ToString('o');items=@(@{key='five_hour';remainingPercent=7;resetsAt=(Get-Date).AddMinutes(-30).ToString('o')})} | ConvertTo-Json -Depth 6 | Set-Content $path
         $snapshot = & "Get-$($provider)UsageSnapshot"
         Check ($null -eq $snapshot.items[0].remainingPercent) "$provider must hide expired windows even inside the cache TTL"
-        @{available=$true;stale=$false;lastSuccessAt=(Get-Date).AddMinutes(-30).ToString('o');items=@(@{key='five_hour';remainingPercent=50;resetsAt=(Get-Date).AddHours(1).ToString('o')})} | ConvertTo-Json -Depth 6 | Set-Content $path
+        @{credentialRevision=$revision;available=$true;stale=$false;lastSuccessAt=(Get-Date).AddMinutes(-30).ToString('o');items=@(@{key='five_hour';remainingPercent=50;resetsAt=(Get-Date).AddHours(1).ToString('o')})} | ConvertTo-Json -Depth 6 | Set-Content $path
         $snapshot = & "Get-$($provider)UsageSnapshot"
         Check ([bool]$snapshot.stale -and [bool]$snapshot.available) "$provider must distinguish old cached success from current data"
     }

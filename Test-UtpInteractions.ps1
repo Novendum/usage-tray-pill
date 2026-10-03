@@ -26,6 +26,13 @@ function Ensure-ClaudeUsageKeeper {}
 function Check { param([bool]$Condition,[string]$Message) if (-not $Condition) { throw $Message } }
 function Get-AllControls { param($Root) $Root; foreach ($child in $Root.Controls) { Get-AllControls $child } }
 
+Check ([bool](New-DefaultState).settings.hideTaskbarBadgeInFullscreen) 'New installs must preserve full-screen hiding by default'
+$legacyState=New-DefaultState
+$legacyState.settings.PSObject.Properties.Remove('hideTaskbarBadgeInFullscreen')
+Check ([bool](Normalize-State $legacyState).settings.hideTaskbarBadgeInFullscreen) 'Existing settings without the preference must retain full-screen hiding'
+$legacyState.settings.hideTaskbarBadgeInFullscreen=$false
+Check (-not [bool](Normalize-State $legacyState).settings.hideTaskbarBadgeInFullscreen) 'An explicit always-visible preference must be preserved'
+
 # Build the real window and handlers without showing a second UTP window on the desktop.
 $body = (Get-Command Show-MainWindow).ScriptBlock.ToString().Replace('New-Object System.Windows.Forms.Form','New-Object UtpTestForm').Replace('$form.Show()', '$form.ShowInTaskbar=$false; $form.Show()').Replace('$form.Activate()', '')
 Set-Item Function:Show-MainWindow -Value ([scriptblock]::Create($body))

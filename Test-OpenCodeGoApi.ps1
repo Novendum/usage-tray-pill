@@ -54,7 +54,7 @@ $stream = New-Object IO.MemoryStream (,[Text.Encoding]::UTF8.GetBytes('eight888'
 try { Assert-ApiError { Read-OpenCodeGoLimitedUtf8Stream $stream -MaximumBytes 7 } 'response_too_large' } finally { $stream.Dispose() }
 
 # In-memory snapshot and transport doubles exercise the actual collector without requests or writes.
-$script:snapshot = [pscustomobject]@{lastSuccessAt=(Get-Date).ToString('o');items=$items}
+$script:snapshot = [pscustomobject]@{lastSuccessAt=(Get-Date).ToString('o');items=$items;credentialRevision=(Get-UtpCredentialRevision 'opencodego')}
 function Read-OpenCodeGoUsageSnapshotRaw { $script:snapshot }
 function Write-OpenCodeGoUsageSnapshot { param($Usage) $script:snapshot = $Usage }
 $successTime = $script:snapshot.lastSuccessAt

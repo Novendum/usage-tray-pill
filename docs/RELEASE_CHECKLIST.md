@@ -1,35 +1,25 @@
 # Release checklist
 
-October 2026 update. Each checkmark applies only to evidence recorded in [Open-source readiness](OPEN_SOURCE_READINESS.md), not to every future commit.
+Use this checklist for each candidate. Check results in its GitHub Actions run and release notes; previous releases do not prove the next package.
 
-## Local candidate
+## Candidate
 
-- [x] README separates quick start, optional setup, requirements and limitations.
-- [x] Privacy, security and architecture describe the new collection paths.
-- [x] Product images use isolated synthetic values; generated cover is identified as brand artwork.
-- [x] Online history and earlier demo/public-status fixes are identified for preservation.
-- [x] Final candidate passes the aggregate Windows PowerShell 5.1 suite after extraction to a path with spaces.
-- [x] Final candidate passes Gitleaks and a runtime-data/credential filename check.
-- [x] File manifest and visual-asset hashes match the reviewed package.
+- [ ] Integrate onto current public main without rewriting history.
+- [ ] Review the complete diff, new runtime helpers, tests and documentation.
+- [ ] Run the complete Windows PowerShell 5.1 suite with isolated application data.
+- [ ] Preserve fullscreen hiding and provider opt-in defaults.
+- [ ] Run Gitleaks and exclude runtime data, saved credentials, logs and personal screenshots.
+- [ ] Document provider and physical-device validation limits.
 
-## Provider compatibility
+## GitHub
 
-- [x] Local signed-in reads were observed for Codex, Claude CLI 2.1.286, Antigravity CLI 1.2.14 and OpenCode Go during October development.
-- [x] Offline regressions cover authentication pauses, retries, missing data, enable/disable behavior and credential boundaries.
-- [ ] Full manual OpenCode Go setup, expired-key, subscription, rate-limit and cross-user DPAPI matrix.
-- [ ] Full manual Qwen plan/session matrix. Qwen remains optional and off by default.
-- [ ] Fresh-user Windows installation and multiple physical display/scaling combinations.
+- [ ] Open a normal pull request and pass the required `powershell-51` and `secret-scan` checks.
+- [ ] Merge with maintainer authorization and verify the main-branch checks.
+- [ ] Build the release archive from the exact merged commit.
+- [ ] Extract the complete archive to a Windows path containing spaces and rerun all tests.
+- [ ] Verify file inventory, source hashes, relative documentation links and the package secret scan.
+- [ ] Publish the authorized version as a prerelease, with a SHA-256 checksum and clear upgrade instructions.
+- [ ] Download the published assets and confirm their hashes against the tested package.
+- [ ] Verify public README media and release links before announcing the release.
 
-Fixtures and an owner session do not establish universal provider compatibility. Retain these limitations in release notes.
-
-## GitHub publication
-
-- [x] Integrate onto current public main through an authorized checkout/branch, retaining existing history.
-- [ ] Review the complete diff and new files/media; scan the actual proposed Git history.
-- [ ] Both required GitHub checks pass on the update.
-- [ ] Verify README links, images and install instructions in GitHub.
-- [ ] Merge after maintainer authorization.
-- [ ] Build and test the final archive from the merged commit; choose and publish the release after authorization.
-- [ ] Check the public download before posting the announcement.
-
-Historical July/August checkmarks are not proof for this update. Local preparation does not create a tag, release or history rewrite.
+See [release readiness](OPEN_SOURCE_READINESS.md) for local evidence and remaining manual validation. Keep runtime settings and credentials outside the archive. Publication does not authorize an X post.

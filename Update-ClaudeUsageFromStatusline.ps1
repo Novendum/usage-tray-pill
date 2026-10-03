@@ -229,11 +229,17 @@ function Write-StatuslineOutput {
     if (-not [string]::IsNullOrWhiteSpace([string]$Snapshot.modelName)) {
         $parts += $Snapshot.modelName
     }
-    if ($null -ne $Snapshot.fiveHourRemainingPercent) {
-        $parts += "5h $($Snapshot.fiveHourRemainingPercent)%"
-    }
-    if ($null -ne $Snapshot.sevenDayRemainingPercent) {
-        $parts += "7d $($Snapshot.sevenDayRemainingPercent)%"
+    $now=Get-Date
+    foreach($window in @(@{key='five_hour';prefix='fiveHour';label='5h'},@{key='seven_day';prefix='sevenDay';label='7d'})){
+        $limit=@($Snapshot.limits)|Where-Object {$_.key -eq $window.key}|Select-Object -First 1 -Wait
+        $observed=[datetime]::MinValue;$reset=[datetime]::MinValue
+        $observation=if($null -ne $limit -and $limit.observedAt){[string]$limit.observedAt}else{[string]$Snapshot.lastCheckedAt}
+        $resetValue=if($null -ne $limit){[string]$limit.resetsAt}else{[string]$Snapshot.($window.prefix+'ResetsAt')}
+        $remaining=if($null -ne $limit){$limit.remainingPercent}else{$Snapshot.($window.prefix+'RemainingPercent')}
+        if(-not [datetime]::TryParse($observation,[ref]$observed) -or $observed -gt $now.AddMinutes(1) -or ($now-$observed).TotalMinutes -gt 15){continue}
+        if($resetValue -and (-not [datetime]::TryParse($resetValue,[ref]$reset) -or $reset -le $now)){continue}
+        $remaining=Get-NumberOrNull $remaining
+        if($null -ne $remaining){$parts+="$($window.label) $remaining%"}
     }
     Write-Output ($parts -join " ")
 }

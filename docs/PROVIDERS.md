@@ -22,11 +22,15 @@ Claude documents 5-hour and 7-day usage fields in its statusline. UTP may also r
 
 Preferences also offers **Use Claude CLI quotas (experimental)**. This remains off by default. It uses an isolated, zero-user-message `get_usage` control request with transcript-behavior scanning disabled. Sign in to Claude Code with your subscription first. The selected source uses its own cache and does not silently fall back. Local validation on 2026-10-02 confirmed quota reads with Claude Code 2.1.286 after sign-in, with no model activity; the upstream API remains experimental.
 
-The CLI quota source starts its own isolated helper and does not require Claude Desktop to remain open. An unverifiable quota response is retried after 30 seconds with exponential backoff capped at 15 minutes. Authentication/setup failures and unexpected model or transcript activity remain paused. Invalid responses never become displayed percentages.
+The CLI quota source starts its own isolated helper and does not require Claude Desktop to remain open. Successful reads refresh every three minutes. Claude can report account eligibility while returning no quota data; UTP treats this as a temporary fetch failure and waits at least five minutes before retrying, with backoff capped at 15 minutes. Other transient failures start with a 30-second retry.
+
+After a temporary failure, verified values may remain visible for at most ten minutes from the last successful read, marked **cache** on the pill and with their observation time in the overview. Each window also expires at its reset time. Failed attempts never extend this lifetime. Authentication/setup failures and unexpected model or transcript activity clear values and pause collection. Invalid responses never become displayed percentages.
 
 ### Antigravity
 
 `ExternalUsageAdapters.ps1` invokes an installed Antigravity CLI with `-p /usage --output-format json`. Its strict parser follows an observed output contract, not a Google-published JSON schema. Missing CLI installation produces `setup_required`; unsupported responses remain unavailable. Local validation on 2026-10-02 confirmed the four Gemini/third-party quota windows with signed-in CLI 1.2.14 and zero model turns. The pill shows the restrictive window per family; Details retains all windows. UTP does not install dependencies automatically, inspect language-server CSRF values, or use the former loopback quota service.
+
+UTP sets `AGY_CLI_DISABLE_AUTO_UPDATE=true` only for its Antigravity CLI version and quota reads. This prevents a background usage check from starting AGY's updater or a transient terminal window. It does not change the user's normal CLI environment or update settings. The exact string value is required by the behavior described in [AGY issue 1046](https://github.com/google-antigravity/antigravity-cli/issues/1046).
 
 ### OpenCode Go
 
@@ -42,6 +46,8 @@ The API supplies 5-hour, weekly, and monthly percentages, statuses, and reset ti
 
 For managed setups, `OPENCODE_GO_API_KEY` takes precedence over UTP's saved key. Legacy workspace/cookie environment variables are no longer used.
 
+Changing the saved key or active environment key invalidates quotas from the previous connection. Pauses and retry deadlines survive collector restarts; use an explicit refresh after resolving a paused source's setup or authentication issue.
+
 ### Qwen Token Plan
 
 Qwen is disabled by default. Open the tray menu and choose **Set up Qwen Token Plan**. In the QwenCloud dashboard, open DevTools, refresh the subscription page, select the `tool/user/info.json` request, and copy only the value of **Request Headers > Cookie** into UTP's local setup dialog. Never paste this value into a bug report or chat.
@@ -51,6 +57,8 @@ UTP encrypts the session header with Windows DPAPI for the current Windows user.
 When enabled, refreshes request only `home.qwencloud.com/tool/user/info.json` and the Token Plan usage gateway on `cs-data.qwencloud.com`, normally every two minutes without overlap. These dashboard interfaces can change; the current adapter recognizes 5-hour and weekly windows, not every newer plan variant. Temporary errors may retain cached values for at most six hours; expired authentication clears them and pauses requests. The Qwen checkbox in Preferences disables collection without deleting the encrypted session or cache.
 
 For managed setups, `QWEN_TOKEN_PLAN_COOKIE` may supply the complete Cookie request-header value. It takes precedence over UTP's encrypted local credential.
+
+Replacing the session invalidates the previous connection's quota cache. Disabling and re-enabling collection preserves the current connection and its retry deadline.
 
 ### Cursor
 

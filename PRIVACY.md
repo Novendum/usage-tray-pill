@@ -8,6 +8,8 @@ UTP stores settings, manual notes, cached usage percentages, reset timestamps, a
 
 Normalized Codex usage is stored separately in `codex-usage.json`. Refresh workers do not write your settings or manual notes in `data.json`.
 
+Per-provider collector schedule files store retry deadlines and pause state. OpenCode Go and Qwen caches and schedules also store a one-way revision hash of the active credential configuration to prevent reuse of another connection's quotas. These records contain no plaintext key or cookie.
+
 When OpenCode Go is explicitly configured, version 2 of `opencode-go-credentials.json` contains the user-supplied API key encrypted with Windows DPAPI for the current Windows user. UTP does not write the plaintext key to disk. `OPENCODE_GO_API_KEY` can supply the key instead and takes precedence. Legacy version-1 cookie records are left intact without decryption or use until the user explicitly saves a replacement.
 
 When Qwen Token Plan is explicitly configured, `qwen-token-plan-credentials.json` contains the user-supplied QwenCloud Cookie request-header value encrypted with Windows DPAPI for the current Windows user. The plaintext header is not written to disk by UTP.

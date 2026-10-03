@@ -139,6 +139,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RequestDeadline.cs')
 if (-not ($RefreshLiveOnce -or $RefreshAntigravityOnce -or $RefreshOpenCodeGoOnce -or $RefreshQwenOnce)) {
     Add-Type -Path (Join-Path $PSScriptRoot 'PillRenderer.cs') -ReferencedAssemblies System.Windows.Forms,System.Drawing
+    Add-Type -Path (Join-Path $PSScriptRoot 'BadgeVisibility.cs') -ReferencedAssemblies System.Drawing
 }
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -183,6 +184,7 @@ $script:BadgeTheme = 'Light'
 $script:PendingStateSave = $false
 $script:RefreshMainWindow = $null
 $script:BadgeForm = $null
+$script:BadgeVisibility = $null
 $script:BadgeLogoViewport = $null
 $script:BadgeLogo = $null
 $script:BadgeLogoNext = $null
@@ -368,6 +370,7 @@ function New-DefaultState {
             autoPollLiveUsage = $true
             liveUsagePollIntervalMinutes = 5
             showTaskbarBadge = $true
+            hideTaskbarBadgeInFullscreen = $true
             taskbarBadgeDefaultSource = "codex"
             codexLimitId = "codex"
             keepClaudeCodeAlive = $false
@@ -444,6 +447,7 @@ function Normalize-State {
     Ensure-Property -Target $State.settings -Name "liveUsagePollIntervalMinutes" -Value 5
     Ensure-Property -Target $State.settings -Name "showTaskbarBadge" -Value $true
     Ensure-Property -Target $State.settings -Name "taskbarBadgeDefaultSource" -Value "codex"
+    Ensure-Property -Target $State.settings -Name "hideTaskbarBadgeInFullscreen" -Value $true
     Ensure-Property -Target $State.settings -Name "codexLimitId" -Value "codex"
     Ensure-Property -Target $State.settings -Name "claudeControlEnabled" -Value $false
     Ensure-Property -Target $State.settings -Name "keepClaudeCodeAlive" -Value $false
@@ -740,7 +744,7 @@ function Get-NextReset {
         return $null
     }
 
-    return ($active | Sort-Object Date | Select-Object -First 1)
+    return ($active | Sort-Object Date | Select-Object -First 1 -Wait)
 }
 
 function Get-NextLimit {
@@ -761,7 +765,7 @@ function Get-NextLimit {
         return $null
     }
 
-    return ($items | Sort-Object Date | Select-Object -First 1)
+    return ($items | Sort-Object Date | Select-Object -First 1 -Wait)
 }
 
 function Test-CodexAppProcess {
@@ -787,7 +791,7 @@ function Test-CodexRunning {
         return $null -ne (
             Get-Process -Name "Codex", "ChatGPT" -ErrorAction SilentlyContinue |
                 Where-Object { Test-CodexAppProcess $_ } |
-                Select-Object -First 1
+                Select-Object -First 1 -Wait
         )
     }
     catch {
@@ -957,7 +961,7 @@ function Start-ClaudeUsageKeeper {
         return $false
     }
 
-    if (Test-ClaudeCodeRunning -or Test-ClaudeKeeperRunning) {
+    if ((Test-ClaudeCodeRunning) -or (Test-ClaudeKeeperRunning)) {
         return $true
     }
 
@@ -1063,9 +1067,9 @@ function Get-JsonLineResponse {
 
 function Resolve-CodexCommandPath {
     $commands = @(Get-Command -Name "codex" -All -CommandType Application -ErrorAction SilentlyContinue)
-    $command = $commands | Where-Object { [System.IO.Path]::GetExtension([string]$_.Source) -in @(".cmd", ".bat") } | Select-Object -First 1
+    $command = $commands | Where-Object { [System.IO.Path]::GetExtension([string]$_.Source) -in @(".cmd", ".bat") } | Select-Object -First 1 -Wait
     if ($null -eq $command) {
-        $command = $commands | Where-Object { [System.IO.Path]::GetExtension([string]$_.Source) -ieq ".exe" } | Select-Object -First 1
+        $command = $commands | Where-Object { [System.IO.Path]::GetExtension([string]$_.Source) -ieq ".exe" } | Select-Object -First 1 -Wait
     }
 
     if ($null -eq $command -or [string]::IsNullOrWhiteSpace([string]$command.Source)) {
@@ -1274,7 +1278,7 @@ function Update-LiveUsage {
             }
         }
 
-        $mainBucket = $buckets | Where-Object { $_.limitId -eq "codex" } | Select-Object -First 1
+        $mainBucket = $buckets | Where-Object { $_.limitId -eq "codex" } | Select-Object -First 1 -Wait
         if ($null -eq $mainBucket -and $buckets.Count -gt 0) {
             $mainBucket = $buckets[0]
         }
@@ -1314,7 +1318,7 @@ function Get-MainLiveBucket {
     $buckets = @(Get-LiveUsageBuckets)
     $selected = [string]$script:State.settings.codexLimitId
     if ([string]::IsNullOrWhiteSpace($selected)) { $selected='codex' }
-    $bucket = $buckets | Where-Object { $_.limitId -eq $selected } | Select-Object -First 1
+    $bucket = $buckets | Where-Object { $_.limitId -eq $selected } | Select-Object -First 1 -Wait
     if ($null -ne $bucket) {
         return $bucket
     }
@@ -1422,8 +1426,8 @@ function Convert-ClaudeDesktopUsageHistory {
         }
     }
 
-    $five = $limits | Where-Object { $_.key -eq "five_hour" } | Select-Object -First 1
-    $seven = $limits | Where-Object { $_.key -eq "seven_day" } | Select-Object -First 1
+    $five = $limits | Where-Object { $_.key -eq "five_hour" } | Select-Object -First 1 -Wait
+    $seven = $limits | Where-Object { $_.key -eq "seven_day" } | Select-Object -First 1 -Wait
     return [pscustomobject]@{
         source = "claude-desktop-plan-history"
         lastCheckedAt = Format-DateForStorage $checkedAt
@@ -1446,7 +1450,7 @@ function Get-ClaudeDesktopUsageSnapshot {
         ForEach-Object { Join-Path $_.FullName "LocalCache\Roaming\Claude\plan-usage-history.json" } |
         Where-Object { Test-Path -LiteralPath $_ } |
         Sort-Object { (Get-Item -LiteralPath $_).LastWriteTime } -Descending |
-        Select-Object -First 1
+        Select-Object -First 1 -Wait
     if ([string]::IsNullOrWhiteSpace([string]$historyPath)) { return $null }
     try {
         $history = Get-Content -LiteralPath $historyPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
@@ -1460,9 +1464,13 @@ function Get-ClaudeUsageSnapshot {
     if([bool]$script:State.settings.claudeControlEnabled){
         try {
             $control=Get-Content -LiteralPath $script:ClaudeControlUsagePath -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
-            $five=@($control.items)|Where-Object key -eq 'five_hour'|Select-Object -First 1
-            $week=@($control.items)|Where-Object key -eq 'seven_day'|Select-Object -First 1
-            $usage=[pscustomobject]@{source='claude-code-control';lastCheckedAt=$control.lastCheckedAt;lastError=$control.lastError;lastSuccessAt=$control.lastSuccessAt;fiveHourRemainingPercent=$five.remainingPercent;fiveHourResetsAt=$five.resetsAt;sevenDayRemainingPercent=$week.remainingPercent;sevenDayResetsAt=$week.resetsAt;limits=@($control.items);modelName='';version=''}
+            $controlItems=@($control.items)
+            if([bool]$control.stale){
+                $controlItems=@(if(Test-UtpClaudeTransientFailure $control.errorCode){Get-UtpClaudeCachedItems -Snapshot $control})
+            }
+            $five=@($controlItems)|Where-Object key -eq 'five_hour'|Select-Object -First 1 -Wait
+            $week=@($controlItems)|Where-Object key -eq 'seven_day'|Select-Object -First 1 -Wait
+            $usage=[pscustomobject]@{source='claude-code-control';lastCheckedAt=$control.lastCheckedAt;lastError=$control.lastError;errorCode=$control.errorCode;lastSuccessAt=$control.lastSuccessAt;stale=[bool]$control.stale;available=[bool]$control.available;fiveHourRemainingPercent=$five.remainingPercent;fiveHourResetsAt=$five.resetsAt;sevenDayRemainingPercent=$week.remainingPercent;sevenDayResetsAt=$week.resetsAt;limits=@($controlItems);modelName='';version=''}
         }catch{return $null}
     }
     elseif (Test-Path -LiteralPath $script:ClaudeUsagePath) {
@@ -1480,8 +1488,10 @@ function Get-ClaudeUsageSnapshot {
 
     if ($null -eq $usage) { return $null }
     try {
-        $checked = Get-DateOrNull ([string]$usage.lastCheckedAt)
-        if ($null -eq $checked -or $checked -gt (Get-Date).AddMinutes(1) -or ((Get-Date) - $checked).TotalMinutes -gt 15 -or -not [string]::IsNullOrWhiteSpace([string]$usage.lastError)) {
+        $cacheAllowed=[bool]$usage.stale -and (Test-UtpClaudeTransientFailure ([string]$usage.errorCode))
+        $checked = Get-DateOrNull $(if($cacheAllowed){[string]$usage.lastSuccessAt}else{[string]$usage.lastCheckedAt})
+        $maxAge=if($cacheAllowed){10}else{15}
+        if ($null -eq $checked -or $checked -gt (Get-Date).AddMinutes(1) -or ((Get-Date) - $checked).TotalMinutes -gt $maxAge -or (-not [string]::IsNullOrWhiteSpace([string]$usage.lastError) -and -not $cacheAllowed)) {
             $usage.fiveHourRemainingPercent = $null
             $usage.sevenDayRemainingPercent = $null
             foreach ($limit in @($usage.limits)) { $limit.remainingPercent = $null }
@@ -1497,6 +1507,7 @@ function Get-ClaudeUsageSnapshot {
             if ($limit.key -eq 'five_hour') { $usage.fiveHourRemainingPercent = $limit.remainingPercent }
             if ($limit.key -eq 'seven_day') { $usage.sevenDayRemainingPercent = $limit.remainingPercent }
         }
+        if($usage.source -eq 'claude-code-control'){$usage.available=($null -ne $usage.fiveHourRemainingPercent -or $null -ne $usage.sevenDayRemainingPercent)}
         return $usage
     }
     catch {
@@ -1659,7 +1670,7 @@ function Get-TaskbarBadgeData {
         )) {
             $remaining = $null
             if ($null -ne $usage -and [bool]$usage.available) {
-                $match = @($usage.items) | Where-Object { $_.key -eq $definition.Key } | Select-Object -First 1
+                $match = @($usage.items) | Where-Object { $_.key -eq $definition.Key } | Select-Object -First 1 -Wait
                 if ($null -ne $match) { $remaining = $match.remainingPercent }
             }
             $items += [pscustomobject]@{
@@ -1693,7 +1704,7 @@ function Get-TaskbarBadgeData {
         )) {
             $remaining = $null
             if ($null -ne $usage -and [bool]$usage.available) {
-                $match = @($usage.items) | Where-Object { $_.key -eq $definition.Key } | Select-Object -First 1
+                $match = @($usage.items) | Where-Object { $_.key -eq $definition.Key } | Select-Object -First 1 -Wait
                 if ($null -ne $match) { $remaining = $match.remainingPercent }
             }
             $items += [pscustomobject]@{
@@ -1721,7 +1732,7 @@ function Get-TaskbarBadgeData {
         $usage = Get-AntigravityUsageSnapshot
         $items = @()
         if ($null -ne $usage -and [bool]$usage.available) {
-            foreach ($item in @(Get-AntigravityDisplayItems $usage) | Select-Object -First 3) {
+            foreach ($item in @(Get-AntigravityDisplayItems $usage) | Select-Object -First 3 -Wait) {
                 $remaining = $item.remainingPercent
                 $items += [pscustomobject]@{
                     Label = [string]$item.label
@@ -1758,7 +1769,7 @@ function Get-TaskbarBadgeData {
         )) {
             $remaining = $null
             if ($null -ne $usage) {
-                $match = @($usage.limits) | Where-Object { $_.key -eq $definition.Key -or $_.label -eq $definition.Label } | Select-Object -First 1
+                $match = @($usage.limits) | Where-Object { $_.key -eq $definition.Key -or $_.label -eq $definition.Label } | Select-Object -First 1 -Wait
                 if ($null -ne $match) { $remaining = $match.remainingPercent }
                 elseif (-not [string]::IsNullOrWhiteSpace($definition.Legacy)) { $remaining = $usage.($definition.Legacy) }
             }
@@ -1769,7 +1780,12 @@ function Get-TaskbarBadgeData {
             }
         }
 
+        $cached=[bool]$usage.stale -and @($items|Where-Object {$_.Text -ne '--'}).Count -gt 0
+        if($cached){$items += [pscustomobject]@{Label='cache';Text='';Color=$neutralColor}}
+        $status=if($cached){'Cached '+(Get-DateOrNull $usage.lastSuccessAt).ToString('HH:mm')}elseif(@($items|Where-Object {$_.Text -ne '--'}).Count -gt 0){'Remaining allowance'}elseif(-not $script:State.settings.claudeControlEnabled){'Waiting for statusline data'}elseif($usage.errorCode -in @('auth_required','unsupported_auth_context','setup_required')){'CLI sign-in / setup required'}elseif((Get-ProviderRetrySeconds ([string]$usage.errorCode) 1) -lt 0){'Collection paused; check Details'}else{'Usage unavailable; retrying'}
         return [pscustomobject]@{
+            Cached = $cached
+            StatusText = $status
             Source = "claude"
             SourceText = ""
             PrimaryPrefix = $items[0].Label
@@ -1820,8 +1836,8 @@ function Get-AntigravityDisplayItems {
     param($Usage)
     foreach($group in @($Usage.items | Group-Object {if($_.family){$_.family}else{$_.key}})) {
         $known=@($group.Group | Where-Object {$null -ne $_.remainingPercent} | Sort-Object remainingPercent)
-        if($known.Count -eq $group.Count -or ($known.Count -gt 0 -and $known[0].remainingPercent -eq 0)){$known|Select-Object -First 1}
-        else{$group.Group|Where-Object {$null -eq $_.remainingPercent}|Select-Object -First 1}
+        if($known.Count -eq $group.Count -or ($known.Count -gt 0 -and $known[0].remainingPercent -eq 0)){$known|Select-Object -First 1 -Wait}
+        else{$group.Group|Where-Object {$null -eq $_.remainingPercent}|Select-Object -First 1 -Wait}
     }
 }
 
@@ -2003,7 +2019,7 @@ function Get-UtpAppxInstallLocation {
         try {
             $package = Get-AppxPackage -Name $packageName -ErrorAction SilentlyContinue |
                 Sort-Object Version -Descending |
-                Select-Object -First 1
+                Select-Object -First 1 -Wait
             if ($null -ne $package -and
                 -not [string]::IsNullOrWhiteSpace([string]$package.InstallLocation) -and
                 (Test-Path -LiteralPath $package.InstallLocation)) {
@@ -2022,7 +2038,7 @@ function Get-CodexIconPath {
         $processPath = Get-Process -Name "ChatGPT", "Codex" -ErrorAction SilentlyContinue |
             Where-Object { Test-CodexAppProcess $_ } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_.Path) } |
-            Select-Object -First 1 -ExpandProperty Path
+            Select-Object -First 1 -Wait -ExpandProperty Path
 
         if (-not [string]::IsNullOrWhiteSpace($processPath)) {
             $appDir = Split-Path -Parent $processPath
@@ -2054,7 +2070,7 @@ function Get-CodexIconPath {
     try {
         $package = Get-ChildItem -Directory "C:\Program Files\WindowsApps" -Filter "OpenAI.Codex_*" -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
+            Select-Object -First 1 -Wait
         if ($null -ne $package) {
             $appDir = Join-Path $package.FullName "app"
             foreach ($candidate in @(Get-CodexIconCandidatePaths -AppDirectory $appDir)) {
@@ -2092,7 +2108,7 @@ function Get-ClaudeIconPath {
                 -not [string]::IsNullOrWhiteSpace($_.Path) -and
                 $_.Path -notmatch '[\\/]claude-code[\\/]'
             } |
-            Select-Object -First 1 -ExpandProperty Path
+            Select-Object -First 1 -Wait -ExpandProperty Path
 
         if (-not [string]::IsNullOrWhiteSpace($processPath)) {
             $appDir = Split-Path -Parent $processPath
@@ -2147,7 +2163,7 @@ function Get-ClaudeIconPath {
     try {
         $package = Get-ChildItem -Directory "C:\Program Files\WindowsApps" -Filter "Claude_*" -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
+            Select-Object -First 1 -Wait
         if ($null -ne $package) {
             $appDir = Join-Path $package.FullName "app"
             foreach ($candidate in @(Get-ClaudeIconCandidatePaths -AppDirectory $appDir)) {
@@ -2172,7 +2188,7 @@ function Get-AntigravityAppPath {
     try {
         $runningPath = Get-Process -Name 'Antigravity' -ErrorAction SilentlyContinue |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_.Path) } |
-            Select-Object -First 1 -ExpandProperty Path
+            Select-Object -First 1 -Wait -ExpandProperty Path
         if (-not [string]::IsNullOrWhiteSpace([string]$runningPath)) { return $runningPath }
     }
     catch {
@@ -2778,7 +2794,7 @@ function Get-ProviderStatusMessage {
     $checked = Get-DateOrNull ([string]$usage.lastCheckedAt)
     $maxAge = if ($Source -eq 'antigravity') { 5 } else { 15 }
     if ($null -eq $checked -or ((Get-Date) - $checked).TotalMinutes -gt $maxAge) {
-        if ($Source -eq 'claude') { return "$name - Usage is out of date. Open Claude Code or Claude Desktop to update it." }
+        if ($Source -eq 'claude' -and -not $script:State.settings.claudeControlEnabled) { return "$name - Usage is out of date. Open Claude Code or Claude Desktop to update it." }
         return "$name - Usage is out of date. Right-click > Refresh now."
     }
     return "$name - Updated $(Format-DisplayDate $usage.lastCheckedAt)"
@@ -3042,10 +3058,23 @@ function Ensure-TaskbarBadge {
     }
 }
 
+function Test-TaskbarBadgeShouldHide {
+    if(-not [bool]$script:State.settings.hideTaskbarBadgeInFullscreen){
+        if($null -ne $script:BadgeVisibility){$script:BadgeVisibility.Reset($false)}
+        return $false
+    }
+    if($null -eq $script:BadgeVisibility){$script:BadgeVisibility=New-Object UtpBadgeVisibility}
+    $monitor=[Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $pill=if($null -ne $script:BadgeForm -and -not $script:BadgeForm.IsDisposed){$script:BadgeForm.Bounds}else{Get-TaskbarBadgeBounds}
+    $handle=if($null -ne $script:BadgeForm -and -not $script:BadgeForm.IsDisposed){$script:BadgeForm.Handle}else{[IntPtr]::Zero}
+    return $script:BadgeVisibility.Update([UtpBadgeVisibility]::ReadHideCandidate($monitor,$pill,$handle))
+}
+
 function Refresh-TaskbarBadge {
     param([switch]$GeometryOnly)
 
-    $geometryOnlyMode = [bool]$GeometryOnly
+    # An invalidated render must survive an early return while the pill is hidden.
+    $geometryOnlyMode = [bool]$GeometryOnly -and -not [string]::IsNullOrWhiteSpace($script:BadgeRenderSignature)
     $theme = Get-SystemTrayIconTheme
     if ($script:BadgeTheme -ne $theme) {
         $script:BadgeTheme = $theme
@@ -3058,11 +3087,13 @@ function Refresh-TaskbarBadge {
         }
     }
     if (-not [bool]$script:State.settings.showTaskbarBadge) {
+        $script:BadgeRenderSignature = ''
         Hide-TaskbarBadge
         return
     }
 
-    if (Test-ForegroundWindowFullscreen) {
+    if (Test-TaskbarBadgeShouldHide) {
+        $script:BadgeRenderSignature = ''
         Hide-TaskbarBadge
         return
     }
@@ -3851,6 +3882,7 @@ function Update-MainWindow {
         }
 
         if ($null -ne $script:MainWindowControls.QwenEnabled) { $script:MainWindowControls.QwenEnabled.Checked=[bool]$script:State.settings.qwenTokenPlanEnabled }
+        if($null -ne $script:MainWindowControls.FullscreenHide){$script:MainWindowControls.FullscreenHide.Checked=[bool]$script:State.settings.hideTaskbarBadgeInFullscreen}
         if($null -ne $script:MainWindowControls.ClaudeControl){$script:MainWindowControls.ClaudeControl.Checked=[bool]$script:State.settings.claudeControlEnabled}
         Update-CodexBucketChoices
         $refreshing = $script:ProviderRefreshes.Count -gt 0
@@ -3934,7 +3966,7 @@ function Update-MainWindow {
             [void]$liveList.Items.Add($item)
         }
 
-        $openCodeGoUsage = Get-OpenCodeGoUsageSnapshot
+        $openCodeGoUsage = if ([bool]$script:State.settings.openCodeGoEnabled) { Get-OpenCodeGoUsageSnapshot } else { $null }
         $openCodeGoValues = @{}
         if ($null -ne $openCodeGoUsage) {
             foreach ($usageItem in @($openCodeGoUsage.items)) {
@@ -3951,11 +3983,11 @@ function Update-MainWindow {
         [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoWeekly) { Format-ShortDisplayDate $openCodeGoWeekly.resetsAt } else { "-" }))
         [void]$openCodeGoItem.SubItems.Add($(if ($null -ne $openCodeGoMonthly -and $null -ne $openCodeGoMonthly.remainingPercent) { (Format-RemainingPercent $openCodeGoMonthly.remainingPercent) } else { "-" }))
         [void]$openCodeGoItem.SubItems.Add("")
-        [void]$openCodeGoItem.SubItems.Add((Get-OpenCodeGoStatusText))
+        [void]$openCodeGoItem.SubItems.Add($(if ([bool]$script:State.settings.openCodeGoEnabled) { Get-OpenCodeGoStatusText } else { 'Disabled in Preferences' }))
         $openCodeGoItem.Tag = $openCodeGoUsage
         [void]$liveList.Items.Add($openCodeGoItem)
 
-        $qwenUsage = Get-QwenUsageSnapshot
+        $qwenUsage = if ([bool]$script:State.settings.qwenTokenPlanEnabled) { Get-QwenUsageSnapshot } else { $null }
         $qwenValues = @{}
         if ($null -ne $qwenUsage) {
             foreach ($usageItem in @($qwenUsage.items)) {
@@ -3971,7 +4003,7 @@ function Update-MainWindow {
         [void]$qwenItem.SubItems.Add($(if ($null -ne $qwenWeekly) { Format-ShortDisplayDate $qwenWeekly.resetsAt } else { "-" }))
         [void]$qwenItem.SubItems.Add("")
         [void]$qwenItem.SubItems.Add("")
-        [void]$qwenItem.SubItems.Add((Get-QwenStatusText))
+        [void]$qwenItem.SubItems.Add($(if ([bool]$script:State.settings.qwenTokenPlanEnabled) { Get-QwenStatusText } else { 'Paused in Preferences' }))
         $qwenItem.Tag = $qwenUsage
         [void]$liveList.Items.Add($qwenItem)
 
@@ -4102,7 +4134,7 @@ function Update-UsageProviderRows {
     foreach ($source in @('codex','claude','antigravity','opencodego','qwen')) {
         $row=$script:UsageProviderRows[$source]
         $data=Get-TaskbarBadgeData -Source $source
-        $items=@($data.Items)
+        $items=@($data.Items|Where-Object {$_.Label -ne 'cache'})
         if ($source -eq 'codex') {
             $bucket=Get-MainLiveBucket
             $items=@(foreach ($window in @(@{Label='5h';Minutes=300},@{Label='weekly';Minutes=10080})) {
@@ -4118,7 +4150,7 @@ function Update-UsageProviderRows {
             foreach ($item in $items) { $item.Text='--' }
         }
         if ($source -eq 'antigravity' -and -not $hasValues) { $status='CLI setup / sign-in required' }
-        if ($source -eq 'claude' -and -not $hasValues) { $status='Open Claude to update' }
+        if ($source -eq 'claude') { $status=$data.StatusText }
         if ($script:ProviderRefreshes.ContainsKey($source)) { $status='Refreshing...' }
         if ($script:ProviderRefreshErrors.ContainsKey($source)) { $status='Refresh unavailable' }
         $row.Status.Text=$status
@@ -4132,7 +4164,7 @@ function Update-UsageProviderRows {
             $group.Value.Text=$item.Text
             $group.Percent=if($item.Text -eq '<1%'){0.5}elseif($item.Text -match '^(\d+)%$'){[int]$Matches[1]}else{$null}
             $group.Value.ForeColor=if($null -eq $group.Percent){[System.Drawing.Color]::FromArgb(132,136,145)}else{[System.Drawing.Color]::FromArgb(36,38,44)}
-            $group.Fill.BackColor=if($null -eq $group.Percent -or $status -eq 'cache'){[System.Drawing.Color]::FromArgb(169,173,184)}elseif($group.Percent -lt 20){[System.Drawing.Color]::FromArgb(209,67,67)}else{[System.Drawing.Color]::FromArgb(208,34,121)}
+            $group.Fill.BackColor=if($null -eq $group.Percent -or $status -eq 'cache' -or [bool]$data.Cached){[System.Drawing.Color]::FromArgb(169,173,184)}elseif($group.Percent -lt 20){[System.Drawing.Color]::FromArgb(209,67,67)}else{[System.Drawing.Color]::FromArgb(208,34,121)}
         }
     }
     Update-UsageRowLayout -Container $script:MainWindowControls.Rows
@@ -4250,6 +4282,17 @@ function Show-MainWindow {
         if($null -ne $script:RefreshMainWindow){& $script:RefreshMainWindow}
     })
     $settingsPanel.Controls.Add($claudeControlCheck)
+    $fullscreenCheck=New-Object System.Windows.Forms.CheckBox
+    $fullscreenCheck.Text='Hide pill when full-screen covers taskbar'
+    $fullscreenCheck.Location=New-Object System.Drawing.Point 390,110
+    $fullscreenCheck.Size=New-Object System.Drawing.Size 380,24
+    $fullscreenCheck.Checked=[bool]$script:State.settings.hideTaskbarBadgeInFullscreen
+    $fullscreenCheck.Add_Click({param($eventSource,$eventData)
+        $script:State.settings.hideTaskbarBadgeInFullscreen=$eventSource.Checked
+        Save-State
+        Refresh-TaskbarBadge -GeometryOnly
+    })
+    $settingsPanel.Controls.Add($fullscreenCheck)
     $codexBucketBox = New-Object System.Windows.Forms.ComboBox
     $codexBucketBox.DropDownStyle = 'DropDownList'
     $codexBucketBox.DisplayMember = 'Label'
@@ -4579,7 +4622,7 @@ function Show-MainWindow {
     $form.Controls.Add($footer)
     $hideButton.Location = New-Object System.Drawing.Point 820,716
     $exitButton.Location = New-Object System.Drawing.Point 920,716
-    $script:MainWindowControls = @{ClaudeControl=$claudeControlCheck;QwenEnabled=$qwenEnabledCheck;CodexBucket=$codexBucketBox;Rows=$usageRows;Plan=$planBox;Resets=$resetsList;Limits=$limitsList;Live=$liveList;Header=$header;Status=$liveStatusLabel;Refresh=$refreshLiveButton}
+    $script:MainWindowControls = @{FullscreenHide=$fullscreenCheck;ClaudeControl=$claudeControlCheck;QwenEnabled=$qwenEnabledCheck;CodexBucket=$codexBucketBox;Rows=$usageRows;Plan=$planBox;Resets=$resetsList;Limits=$limitsList;Live=$liveList;Header=$header;Status=$liveStatusLabel;Refresh=$refreshLiveButton}
     $script:RefreshMainWindow = { Update-MainWindow }
 
 
@@ -4969,7 +5012,13 @@ function Set-ProviderRefreshFailure {
             $script:State.liveUsage.lastCheckedAt=Format-DateForStorage (Get-Date)
             Write-OpenCodeGoJsonAtomically -Path $script:CodexUsagePath -Value $script:State.liveUsage -MutexName 'UsageTrayPillCodexUsageWrite'
         }
-        'claude' { Write-OpenCodeGoJsonAtomically -Path $script:ClaudeControlUsagePath -Value ([pscustomobject]@{source='claude-code-control';lastCheckedAt=Format-DateForStorage (Get-Date);lastError=$Message;errorCode='network_error';available=$false;items=@()}) -MutexName 'UsageTrayPillClaudeControlUsageWrite' }
+        'claude' {
+            $previous=$null
+            try { $previous=Get-Content -LiteralPath $script:ClaudeControlUsagePath -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop } catch {}
+            $failure=New-UtpExternalUsageFailure 'claude-code-control' 'provider_error' $Message
+            $snapshot=Merge-UtpClaudeUsageSnapshot -Current $failure -Previous $previous
+            Write-OpenCodeGoJsonAtomically -Path $script:ClaudeControlUsagePath -Value $snapshot -MutexName 'UsageTrayPillClaudeControlUsageWrite'
+        }
         'antigravity' { Write-AntigravityUsageSnapshot ([pscustomobject]@{source='antigravity-language-server';lastCheckedAt=Format-DateForStorage (Get-Date);lastError=$Message;available=$false;items=@()}) }
         'opencodego' { Set-OpenCodeGoFailureSnapshot -Code network_error -Message $Message }
         'qwen' { Set-QwenFailureSnapshot -Code network_error -Message $Message }
@@ -5032,7 +5081,8 @@ function Update-ProviderRefreshProcessState {
             if($source -eq 'codex'){Sync-CodexUsageSnapshot}
         }elseif(((Get-Date)-$request.StartedAt).TotalSeconds -ge 45){
             $script:ProviderRefreshes.Remove($source)
-            Stop-UsageCollection
+            # Provider requests have their own bounded lifetimes. A UI deadline
+            # must not terminate the shared collector or unrelated requests.
             Set-ProviderRefreshFailure -Source $source -Message 'Refresh timed out. Try again.'
             $changed=$true
         }
@@ -5517,6 +5567,7 @@ function Invoke-SelfTest {
             [pscustomobject]@{
                 version = 1
                 source = "opencode-go-dashboard"
+                credentialRevision = Get-UtpCredentialRevision 'opencodego'
                 available = $true
                 stale = $false
                 lastCheckedAt = Format-DateForStorage (Get-Date)
@@ -5553,6 +5604,7 @@ function Invoke-SelfTest {
             [pscustomobject]@{
                 version = 1
                 source = "opencode-go-dashboard"
+                credentialRevision = Get-UtpCredentialRevision 'opencodego'
                 available = $true
                 stale = $true
                 lastCheckedAt = Format-DateForStorage (Get-Date)
@@ -5576,6 +5628,7 @@ function Invoke-SelfTest {
             [pscustomobject]@{
                 version = 1
                 source = "qwencloud-token-plan"
+                credentialRevision = Get-UtpCredentialRevision 'qwen'
                 available = $true
                 stale = $false
                 lastCheckedAt = Format-DateForStorage (Get-Date)
@@ -5610,6 +5663,7 @@ function Invoke-SelfTest {
             [pscustomobject]@{
                 version = 1
                 source = "qwencloud-token-plan"
+                credentialRevision = Get-UtpCredentialRevision 'qwen'
                 available = $true
                 stale = $true
                 lastCheckedAt = Format-DateForStorage (Get-Date)

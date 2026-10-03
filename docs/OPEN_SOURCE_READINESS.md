@@ -1,44 +1,34 @@
-# Open-source readiness
+# Release readiness
 
-Reviewed: 2026-10-02. The repository is already public. This record distinguishes the published baseline from the local October update.
+## v0.1.0-rc.4 — stability update
 
-## Published baseline
+Prepared on 2026-10-04 from the public rc.3 baseline. This candidate carries the tested local stability fixes onto the existing public history.
 
-Public main was `814714061b7f8d23f1f3346db940e195e5778c62` at review time. Both required jobs passed in [GitHub Actions](https://github.com/Novendum/usage-tray-pill/actions/runs/30903908068). Tag `v0.1.0-rc.1` exists, but no GitHub Release was listed. These checks predate the October update.
+### Verified locally
 
-The earlier clean-root publication is complete. Preserve its history and the later README/demo fixes. The [August readiness record](https://github.com/Novendum/usage-tray-pill/blob/814714061b7f8d23f1f3346db940e195e5778c62/docs/OPEN_SOURCE_READINESS.md) is historical evidence, not the current checklist.
+- The complete Windows PowerShell 5.1 suite covers provider parsing, cache expiry, account changes, retry deadlines, independent refreshes, fullscreen visibility, rendering and interactions.
+- New regressions cover corrupt schedule files, locked credential files, account changes during failure handling, nested Windows jobs, handle isolation and child-only Unicode environment overrides.
+- Signed-in Codex, Claude Code 2.1.286, Antigravity CLI 1.2.14 and OpenCode Go produced current quota data after local activation. Qwen remained disabled.
+- A Windows Terminal flash was traced through its client process handle to an AGY descendant of UTP. The AGY update-status file changed immediately afterward. With auto-update disabled only for UTP's AGY children, a seven-minute observation recorded 14 direct AGY starts, no nested AGY updater starts and no console-window events. Quota reads continued beyond the updater's normal fifteen-minute check interval.
+- Fullscreen hiding remains enabled by default. No global provider or Windows Terminal settings were changed.
 
-## October update
+### Publication gates
 
-- Persistent collection, Codex connection reuse, file-change notifications and bounded retries.
-- OpenCode Go JSON usage API with an explicitly supplied key, replacing dashboard cookies.
-- Antigravity CLI usage; optional, default-off experimental Claude CLI quotas.
-- Automatic light/dark appearance, native text, smooth alpha edges and queued provider switching.
-- Explicit Qwen enable/disable control retaining the saved connection; no hover popup.
-- Updated README, setup guide, fixture-rendered product images and generated launch artwork.
+The candidate must pass both required GitHub checks before merging. Build the release ZIP from the merged commit, extract it to a path containing spaces, run the complete suite again and scan the package and Git history. Publish its SHA-256 checksum with the archive, then verify the public download. Record the exact commit and final package checks in the [release notes](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.4).
 
-MIT licensing, contributor guidance, reporting templates, privacy/security policies, third-party notices and the threat model remain part of the distribution.
+### Remaining validation limits
 
-## Verification boundaries
+- Full manual OpenCode Go setup, expired-key, subscription and cross-user DPAPI scenarios.
+- Qwen plan/session variants; it is optional and disabled by default.
+- A fresh Windows user, multiple physical monitors and DPI transitions.
+- Long-duration stability across Windows and provider upgrades.
 
-Development checks passed in Windows PowerShell 5.1, including the aggregate suite, pill rendering at 100/125/150/175/200% scale, interaction, collector lifecycle, isolated provider fixtures and relocated selftests. Final package verification is recorded separately below when completed.
+These are not claims of universal compatibility. Keep rc.4 marked as a prerelease. Fixtures and one maintainer machine cannot establish every account/device combination.
 
-Local signed-in reads were observed with Codex, Claude Code 2.1.286, Antigravity CLI 1.2.14 and OpenCode Go. The Claude control check sent no user prompt and showed no model activity; Antigravity returned four windows with zero model turns. No personal quota values or raw provider responses appear in the new media.
+## Earlier releases
 
-## Remaining work
+- [rc.3](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.3): Claude quota recovery and hidden test helpers.
+- [rc.2](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.2): redesigned pill, persistent collection and provider updates.
+- [Historical August readiness record](https://github.com/Novendum/usage-tray-pill/blob/814714061b7f8d23f1f3346db940e195e5778c62/docs/OPEN_SOURCE_READINESS.md).
 
-- Full manual OpenCode failure/setup/DPAPI matrix and Qwen plan/session matrix.
-- Qwen was disabled during the current live check; no new compatibility claim is made for it.
-- Fresh Windows user and multiple physical monitor configurations.
-- GitHub checks on the actual proposed update. Local tests do not prove publication or all-account compatibility.
-- Final release archive, version/tag and the X announcement.
-
-Follow [Release checklist](RELEASE_CHECKLIST.md) and [Repository settings](REPOSITORY_SETTINGS.md). Never rewrite public history to match a local checkout.
-
-## Local package verification, 2026-10-02
-
-The October candidate was assembled from tracked and non-ignored new files without changing the Git index. Its extracted copy passed the complete Windows PowerShell 5.1 suite from a directory containing spaces. The checksum-verified Gitleaks 8.30.1 scanner found no leaks in the package contents. Runtime-data filenames, relative links in the updated docs, media hashes and targeted private-data markers were also checked.
-
-The generated cover, actual light/dark rendering and overview image were visually inspected. GitHub's Markdown API accepted the README. The local HTML browser preview was blocked by the browser's file-URL policy, so final GitHub-page layout verification remains on the publication checklist.
-
-After recording these results, only publication documentation and media changed; the final package's script/native-code hashes were compared with the tested copy. Package contents were rescanned and matched against a SHA-256 manifest. This is local candidate evidence, not a claim that GitHub contains the update. At that local preparation stage, no commit, push, tag, release, repository-setting change or X post had been performed.
+Preserve the public Git history. Never replace it with a local clean-root checkout.

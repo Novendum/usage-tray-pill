@@ -466,9 +466,11 @@ try {
         "OpenCodeGo.ps1",
         "QwenTokenPlan.ps1"
         "PillRenderer.cs"
+        "BadgeVisibility.cs"
         "ExternalUsageAdapters.ps1"
         "CollectorPolicy.ps1"
         "RequestDeadline.cs"
+        "OwnedUsageProcess.cs"
     )) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $runtimeFile) -Destination $relocatedRoot
     }
@@ -501,7 +503,7 @@ if ($LASTEXITCODE -ne 0 -or ($usageOutput -notcontains "Selftest OK")) {
     throw "Claude usage updater selftest failed."
 }
 
-foreach ($regressionScript in @('Test-UtpReliability.ps1', 'Test-UtpInteractions.ps1', 'Test-UtpPillRendering.ps1', 'Test-OpenCodeGoApi.ps1', 'Test-ExternalUsageAdapters.ps1', 'Test-UtpCollector.ps1')) {
+foreach ($regressionScript in @('Test-UtpClaudeCache.ps1', 'Test-UtpVisibility.ps1', 'Test-UtpReliability.ps1', 'Test-UtpInteractions.ps1', 'Test-UtpPillRendering.ps1', 'Test-OpenCodeGoApi.ps1', 'Test-ExternalUsageAdapters.ps1', 'Test-UtpCollector.ps1', 'Test-UtpRefreshRecovery.ps1', 'Test-UtpPresentationRecovery.ps1', 'Test-UtpProviderRecovery.ps1', 'Test-UtpProcessOwnership.ps1', 'Test-UtpAgyUpdater.ps1')) {
     & $windowsPowerShellPath -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $regressionScript)
     if ($LASTEXITCODE -ne 0) { throw "$regressionScript failed." }
 }

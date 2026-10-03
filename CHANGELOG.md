@@ -4,6 +4,28 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.4] - 2026-10-04
+
+### Fixed
+
+- Stop Antigravity quota checks from launching its background updater and flashing Windows Terminal. The override applies only to UTP's AGY child processes.
+- Preserve eligible Claude quotas after temporary failures with a visible cache label, a ten-minute limit and independent reset-time expiry. Authentication and safety failures still clear values and pause collection.
+- Keep other providers running when one refresh times out. Preserve retry deadlines and safety pauses across collector restarts.
+- Bind OpenCode Go and Qwen cached quotas to the active credential configuration; prevent stale account data from surviving a connection change.
+- Own CLI process trees before provider code starts and clean up descendants on timeout, early return and exit.
+- Preserve full-screen hiding by default, exclude desktop and other-monitor windows, and redraw the latest theme and quota data when the pill returns.
+- Hide expired Claude statusline values, correctly detect an existing optional keeper, and label disabled providers in Details.
+
+### Changed
+
+- Refresh successful Claude CLI quotas every three minutes; wait at least five minutes when an eligible account returns no quota data, with retries capped at fifteen minutes.
+- Add a full-screen hiding preference and regression coverage for independent refreshes, credential changes, persistent pauses, process ownership, child-only environment overrides and hidden-window redraws.
+
+### Upgrade notes
+
+- Replace the complete application folder after exiting UTP. Settings and saved connections stay in the user's application-data directory.
+- Old OpenCode Go/Qwen caches without a credential revision remain unknown until the next successful read. Existing provider safety pauses are retained; use **Refresh now** after resolving a sign-in or setup issue.
+
 ## [0.1.0-rc.3] - 2026-10-02
 
 ### Fixed

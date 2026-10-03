@@ -1,5 +1,7 @@
 ﻿$script:OpenCodeGoSnapshotMaxAgeHours = 6
 
+. (Join-Path $PSScriptRoot 'CollectorPolicy.ps1')
+
 function New-OpenCodeGoException {
     param(
         [Parameter(Mandatory = $true)] [string]$Code,
@@ -306,6 +308,9 @@ function Invoke-OpenCodeGoUsageRequest {
 function Write-OpenCodeGoUsageSnapshot {
     param([Parameter(Mandatory = $true)] [object]$Usage)
 
+    if($Usage.PSObject.Properties.Name -notcontains 'credentialRevision'){
+        $Usage|Add-Member -NotePropertyName credentialRevision -NotePropertyValue (Get-UtpCredentialRevision 'opencodego')
+    }
     Write-OpenCodeGoJsonAtomically -Path $script:OpenCodeGoUsagePath -Value $Usage -MutexName "UsageTrayPillOpenCodeGoUsageWrite"
 }
 
@@ -322,6 +327,11 @@ function Get-OpenCodeGoUsageSnapshot {
     if ($null -eq $usage) { return $null }
 
     $copy = $usage | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    if([string]$copy.credentialRevision -ne (Get-UtpCredentialRevision 'opencodego')){
+        $copy.available=$false
+        foreach($item in @($copy.items)){$item.remainingPercent=$null}
+        return $copy
+    }
     $lastSuccess = Get-DateOrNull ([string]$copy.lastSuccessAt)
     if ($null -eq $lastSuccess -or $lastSuccess -gt (Get-Date).AddMinutes(1) -or ((Get-Date) - $lastSuccess).TotalHours -gt $script:OpenCodeGoSnapshotMaxAgeHours) {
         $copy.available = $false
@@ -342,11 +352,12 @@ function Set-OpenCodeGoFailureSnapshot {
         [int]$RetryAfterSeconds = 0
     )
 
+    $credentialRevision=Get-UtpCredentialRevision 'opencodego'
     $previous = Read-OpenCodeGoUsageSnapshotRaw
     $preserveCodes = @("network_error", "rate_limited", "server_error", "parse_error", "response_too_large")
     $items = @()
     $lastSuccessAt = if ($null -ne $previous) { [string]$previous.lastSuccessAt } else { "" }
-    if ($Code -in $preserveCodes -and $null -ne $previous) {
+    if ($Code -in $preserveCodes -and $null -ne $previous -and [string]$previous.credentialRevision -eq $credentialRevision) {
         $lastSuccess = Get-DateOrNull ([string]$previous.lastSuccessAt)
         if ($null -ne $lastSuccess -and $lastSuccess -le (Get-Date).AddMinutes(1) -and ((Get-Date) - $lastSuccess).TotalHours -le $script:OpenCodeGoSnapshotMaxAgeHours) {
             $items = @(As-Array $previous.items)
@@ -357,6 +368,7 @@ function Set-OpenCodeGoFailureSnapshot {
     Write-OpenCodeGoUsageSnapshot ([pscustomobject]@{
         version = 1
         source = "opencode-go-api"
+        credentialRevision = $credentialRevision
         available = ($items.Count -gt 0)
         stale = ($items.Count -gt 0)
         lastCheckedAt = Format-DateForStorage (Get-Date)
@@ -380,6 +392,7 @@ function Update-OpenCodeGoUsage {
         catch [System.Threading.AbandonedMutexException] { $hasPollLock = $true }
         if (-not $hasPollLock) { return $false }
 
+        $credentialRevision=Get-UtpCredentialRevision 'opencodego'
         $credentials = Get-OpenCodeGoCredentials
         if ($null -eq $credentials) {
             throw (New-OpenCodeGoException -Code "setup_required" -Message "OpenCode Go has not been set up.")
@@ -391,6 +404,7 @@ function Update-OpenCodeGoUsage {
         Write-OpenCodeGoUsageSnapshot ([pscustomobject]@{
             version = 1
             source = "opencode-go-api"
+            credentialRevision = $credentialRevision
             available = $true
             stale = $false
             lastCheckedAt = $now
