@@ -46,18 +46,16 @@ function Invoke-UtpExternalUsageCommand {
         [string[]]$Arguments = @(),
         [ValidateRange(100,30000)][int]$TimeoutMilliseconds = 30000,
         [ValidateRange(1,1048576)][int]$MaximumBytes = 1048576,
+        [System.Collections.IDictionary]$EnvironmentOverrides = $null,
         [switch]$ClaudeUsageControl
     )
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo.FileName = $FilePath
-    $process.StartInfo.Arguments = (($Arguments | ForEach-Object { ConvertTo-UtpNativeArgument $_ }) -join ' ')
-    $process.StartInfo.UseShellExecute = $false
-    $process.StartInfo.CreateNoWindow = $true
-    $process.StartInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    $process.StartInfo.RedirectStandardInput = $true
-    $process.StartInfo.RedirectStandardOutput = $true
-    $process.StartInfo.RedirectStandardError = $true
-    $process.StartInfo.WorkingDirectory = [System.IO.Path]::GetTempPath()
+    if (-not ('UtpOwnedUsageProcess' -as [type])) {
+        [System.Threading.Monitor]::Enter([System.Diagnostics.Process])
+        try { if (-not ('UtpOwnedUsageProcess' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'OwnedUsageProcess.cs') } }
+        finally { [System.Threading.Monitor]::Exit([System.Diagnostics.Process]) }
+    }
+    $process = $null
+    $nativeArguments = (($Arguments | ForEach-Object { ConvertTo-UtpNativeArgument $_ }) -join ' ')
     $memory = New-Object System.IO.MemoryStream
     $stdoutBuffer = New-Object byte[] 4096
     $stderrBuffer = New-Object byte[] 4096
@@ -66,8 +64,12 @@ function Invoke-UtpExternalUsageCommand {
     $initialized = $false
     $usageComplete = $false
     $lineOffset = 0
+    $descendantsStopped = $false
     try {
-        if (-not (Start-UtpUsageProcess -Process $process)) { throw 'process_failed' }
+        # Share the existing start lock with Codex's .NET pipe creation too.
+        [System.Threading.Monitor]::Enter([System.Diagnostics.Process])
+        try { $process = [UtpOwnedUsageProcess]::Start($FilePath, $nativeArguments, [System.IO.Path]::GetTempPath(), $EnvironmentOverrides) }
+        finally { [System.Threading.Monitor]::Exit([System.Diagnostics.Process]) }
         if ($ClaudeUsageControl) {
             $process.StandardInput.WriteLine('{"type":"control_request","request_id":"utp-init","request":{"subtype":"initialize","hooks":{},"sdkMcpServers":[]}}')
             $process.StandardInput.Flush()
@@ -78,6 +80,8 @@ function Invoke-UtpExternalUsageCommand {
         $stderrDone = $false
         while (-not ($stdoutDone -and $stderrDone -and $process.HasExited)) {
             if ($watch.ElapsedMilliseconds -ge $TimeoutMilliseconds) { throw 'timeout' }
+            # A child may still hold the inherited output pipes after its parent exits.
+            if (-not $descendantsStopped -and $process.HasExited) { $process.Kill(); $descendantsStopped = $true }
             if (-not $stderrDone -and $stderrRead.IsCompleted) {
                 $count = $stderrRead.GetAwaiter().GetResult()
                 if ($count -eq 0) { $stderrDone = $true }
@@ -133,8 +137,7 @@ function Invoke-UtpExternalUsageCommand {
         if ($ClaudeUsageControl -and -not $usageComplete) { throw 'missing_usage_response' }
         [pscustomobject]@{ ExitCode = $process.ExitCode; Output = [System.Text.Encoding]::UTF8.GetString($memory.ToArray()) }
     } finally {
-        try { if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(1000) } } catch { }
-        $process.Dispose()
+        if ($null -ne $process) { $process.Dispose() }
         $memory.Dispose()
         [Array]::Clear($stdoutBuffer,0,$stdoutBuffer.Length)
         [Array]::Clear($stderrBuffer,0,$stderrBuffer.Length)
@@ -197,12 +200,15 @@ function Get-UtpAntigravityCliUsage {
     $path = Resolve-UtpAntigravityCli
     if ([string]::IsNullOrEmpty($path)) { return New-UtpExternalUsageFailure 'antigravity-cli' 'setup_required' 'Install Antigravity CLI and sign in before enabling usage collection.' }
     try {
-        $versionResult = Invoke-UtpExternalUsageCommand -FilePath $path -Arguments @('--version') -MaximumBytes 16384
+        # Quota reads must not spawn AGY's background updater (and its console).
+        # This upstream-reported flag requires literal "true" and applies only to these children.
+        $environment=@{AGY_CLI_DISABLE_AUTO_UPDATE='true'}
+        $versionResult = Invoke-UtpExternalUsageCommand -FilePath $path -Arguments @('--version') -MaximumBytes 16384 -EnvironmentOverrides $environment
         $match = [regex]::Match($versionResult.Output,'(?m)\b(\d+\.\d+\.\d+)\b')
         if ($versionResult.ExitCode -ne 0 -or -not $match.Success -or [version]$match.Groups[1].Value -lt [version]'1.1.11') {
             return New-UtpExternalUsageFailure 'antigravity-cli' 'setup_required' 'Antigravity CLI 1.1.11 or newer is required for quota-only commands.'
         }
-        $result = Invoke-UtpExternalUsageCommand -FilePath $path -Arguments @('-p','/usage','--output-format','json')
+        $result = Invoke-UtpExternalUsageCommand -FilePath $path -Arguments @('-p','/usage','--output-format','json') -EnvironmentOverrides $environment
         if ($result.ExitCode -ne 0) { return New-UtpExternalUsageFailure 'antigravity-cli' 'provider_error' 'Antigravity CLI could not provide usage. Check its sign-in separately.' }
         ConvertFrom-UtpAntigravityUsageJson -Json $result.Output
     } catch {
@@ -236,7 +242,7 @@ function Resolve-UtpClaudeUsageCli {
             }
         }
     }
-    $newest = $candidates | Sort-Object Version -Descending | Select-Object -First 1
+    $newest = $candidates | Sort-Object Version -Descending | Select-Object -First 1 -Wait
     if ($null -ne $newest) { return [string]$newest.Path }
     foreach ($command in @(Get-Command claude.exe -All -CommandType Application -ErrorAction SilentlyContinue)) {
         if (Test-Path -LiteralPath $command.Source -PathType Leaf) { return [string]$command.Source }
@@ -256,7 +262,9 @@ function ConvertFrom-UtpClaudeControlUsageJson {
     if (-not $payload.rate_limits_available) {
         return New-UtpExternalUsageFailure 'claude-code-control' 'unsupported_auth_context' 'This isolated Claude CLI session does not expose plan limits. The account context is not verified.'
     }
-    if ($null -eq $payload.rate_limits) { throw 'unsupported_response' }
+    if ($null -eq $payload.rate_limits) {
+        return New-UtpExternalUsageFailure 'claude-code-control' 'quota_fetch_unavailable' 'Claude could not fetch plan limits right now. UTP will retry automatically.'
+    }
     $now = [DateTimeOffset]::UtcNow
     $items = @()
     foreach ($key in @('five_hour','seven_day')) {
@@ -301,8 +309,53 @@ function Get-UtpClaudeControlUsage {
     }
 }
 
+function Test-UtpClaudeTransientFailure {
+    param([string]$Code)
+    return $Code -in @('quota_fetch_unavailable','timeout','usage_response_unavailable','provider_error','missing_usage_response')
+}
+
+function Get-UtpClaudeCachedItems {
+    param([object]$Snapshot,[DateTimeOffset]$Now=[DateTimeOffset]::UtcNow)
+    if ($null -eq $Snapshot -or $Snapshot.source -ne 'claude-code-control') { return }
+    $observed=[DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse([string]$Snapshot.lastSuccessAt,[ref]$observed) -or
+        $observed -gt $Now -or ($Now-$observed).TotalMinutes -gt 10) { return }
+    foreach($item in @($Snapshot.items)) {
+        if ($item.key -notin @('five_hour','seven_day')) { continue }
+        $value=$item.remainingPercent
+        if ($null -ne $value -and ($value -is [bool] -or $value -is [string] -or $value -isnot [ValueType] -or
+            [double]::IsNaN([double]$value) -or [double]::IsInfinity([double]$value) -or [double]$value -lt 0 -or [double]$value -gt 100)) { continue }
+        $reset=[DateTimeOffset]::MinValue
+        if (-not [string]::IsNullOrWhiteSpace([string]$item.resetsAt)) {
+            if (-not [DateTimeOffset]::TryParse([string]$item.resetsAt,[ref]$reset)) { continue }
+            if ($reset -le $Now) { $value=$null }
+        }
+        [pscustomobject]@{key=$item.key;label=$(if($item.key -eq 'five_hour'){'5h'}else{'weekly'});remainingPercent=$value;resetsAt=[string]$item.resetsAt}
+    }
+}
+
+function Merge-UtpClaudeUsageSnapshot {
+    param([object]$Current,[object]$Previous,[DateTimeOffset]$Now=[DateTimeOffset]::UtcNow)
+    if ($Current.available) {
+        $Current|Add-Member -NotePropertyName stale -NotePropertyValue $false -Force
+        return $Current
+    }
+    if (-not (Test-UtpClaudeTransientFailure $Current.errorCode)) { return $Current }
+    $items=@(Get-UtpClaudeCachedItems -Snapshot $Previous -Now $Now)
+    if (@($items|Where-Object {$null -ne $_.remainingPercent}).Count -eq 0) { return $Current }
+    return [pscustomobject]@{
+        source='claude-code-control';available=$true;stale=$true
+        lastCheckedAt=$Current.lastCheckedAt;lastSuccessAt=$Previous.lastSuccessAt
+        errorCode=$Current.errorCode;lastError=$Current.lastError;items=$items
+    }
+}
+
 function Update-ClaudeControlUsage {
-    $snapshot=Get-UtpClaudeControlUsage
+    $fresh=Get-UtpClaudeControlUsage
+    $previous=$null
+    try { if(Test-Path -LiteralPath $script:ClaudeControlUsagePath){$previous=Get-Content -LiteralPath $script:ClaudeControlUsagePath -Raw|ConvertFrom-Json -ErrorAction Stop} } catch {}
+    $snapshot=Merge-UtpClaudeUsageSnapshot -Current $fresh -Previous $previous
     Write-OpenCodeGoJsonAtomically -Path $script:ClaudeControlUsagePath -Value $snapshot -MutexName 'UsageTrayPillClaudeControlUsageWrite'
-    return [bool]$snapshot.available
+    # A retained value is not a successful fetch: keep retry backoff active.
+    return [bool]$fresh.available
 }

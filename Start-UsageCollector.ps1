@@ -27,11 +27,16 @@ $worker={
     $script:CodexConnection=$null
     $script:State=Load-State
     $requestsPath=Join-Path $DataDirectory 'refresh-requests.json'
-    $requestVersion=0L;$stateVersion=0L;$credentialVersion=0L;$lastToken='';$next=[datetime]::MinValue;$failures=0;$wasEnabled=$false
+    $requestVersion=0L;$stateVersion=0L;$lastToken=''
     $consumedPath=Join-Path $DataDirectory ("refresh-consumed-$Source.json")
     try {if(Test-Path $consumedPath){$lastToken=[string](Get-Content $consumedPath -Raw|ConvertFrom-Json).token}} catch {}
     $cache=Get-ProviderCachePath -Source $Source
-    $credential=if($Source -eq 'opencodego'){$script:OpenCodeGoCredentialPath}elseif($Source -eq 'qwen'){$script:QwenCredentialPath}else{''}
+    $credentialRevision=Get-UtpCredentialRevision $Source
+    $schedulePath=Join-Path $DataDirectory ("collector-schedule-$Source.json")
+    $snapshot=$null
+    try {if(Test-Path -LiteralPath $cache){$snapshot=Get-Content -LiteralPath $cache -Raw|ConvertFrom-Json}} catch {}
+    $schedule=Read-UtpCollectorSchedule -Path $schedulePath -CredentialRevision $credentialRevision -Snapshot $snapshot
+    $next=$schedule.Next;$failures=$schedule.Failures
     try {
         while(-not $Stop.Requested) {
             $file=Get-Item -LiteralPath $script:DataPath -ErrorAction SilentlyContinue
@@ -50,14 +55,10 @@ $worker={
             }
             $enabled=Test-ProviderEnabled -Source $Source -Settings $script:State.settings
             if($Source -eq 'codex' -and $manual){$enabled=$true}
-            if(-not $enabled) {$wasEnabled=$false;Start-Sleep -Milliseconds 500;continue}
-            if(-not $wasEnabled){$next=[datetime]::MinValue;$wasEnabled=$true}
-            if($credential) {
-                $file=Get-Item -LiteralPath $credential -ErrorAction SilentlyContinue
-                $version=if($null -ne $file){$file.LastWriteTimeUtc.Ticks}else{0L}
-                if($version -ne $credentialVersion){$credentialVersion=$version;$next=[datetime]::MinValue}
-            }
-            if($manual){$next=[datetime]::MinValue}
+            if(-not $enabled) {Start-Sleep -Milliseconds 500;continue}
+            $revision=Get-UtpCredentialRevision $Source
+            if($revision -ne $credentialRevision){$credentialRevision=$revision;$next=[datetime]::MinValue;$failures=0}
+            if($manual){$next=[datetime]::MinValue;$failures=0}
             if((Get-Date) -lt $next){Start-Sleep -Milliseconds 500;continue}
             if($lastToken){Write-OpenCodeGoJsonAtomically -Path $consumedPath -Value ([pscustomobject]@{token=$lastToken}) -MutexName "UsageTrayPillConsumed-$Source"}
             $ok=$false
@@ -75,7 +76,7 @@ $worker={
             }
             $snapshot=$null
             try {$snapshot=Get-Content -LiteralPath $cache -Raw|ConvertFrom-Json} catch {}
-            if($ok) {$failures=0;$seconds=if($Source -eq 'qwen'){120}else{60}}
+            if($ok) {$failures=0;$seconds=Get-ProviderPollSeconds $Source}
             else {
                 $failures++
                 $code=if($snapshot.errorCode){[string]$snapshot.errorCode}else{[string]$snapshot.lastError}
@@ -83,6 +84,7 @@ $worker={
             }
             $next=if($seconds -lt 0){[datetime]::MaxValue}else{(Get-Date).AddSeconds($seconds)}
             if($ok){$reset=Get-NextQuotaReset -Snapshot $snapshot;if($null -ne $reset -and $reset.AddSeconds(1) -lt $next){$next=$reset.AddSeconds(1)}}
+            Write-OpenCodeGoJsonAtomically -Path $schedulePath -Value ([pscustomobject]@{nextAttemptAt=$next.ToString('o');failures=$failures;credentialRevision=$credentialRevision}) -MutexName "UsageTrayPillSchedule-$Source"
         }
     } finally { Close-CodexConnection }
 }

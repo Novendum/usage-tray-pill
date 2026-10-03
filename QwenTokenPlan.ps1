@@ -2,6 +2,8 @@
 $script:QwenGatewayOrigin = "https://cs-data.qwencloud.com"
 $script:QwenSnapshotMaxAgeHours = 6
 
+. (Join-Path $PSScriptRoot 'CollectorPolicy.ps1')
+
 function New-QwenException {
     param(
         [Parameter(Mandatory = $true)] [string]$Code,
@@ -500,6 +502,9 @@ function ConvertFrom-QwenUsageResponse {
 function Write-QwenUsageSnapshot {
     param([Parameter(Mandatory = $true)] [object]$Usage)
 
+    if($Usage.PSObject.Properties.Name -notcontains 'credentialRevision'){
+        $Usage|Add-Member -NotePropertyName credentialRevision -NotePropertyValue (Get-UtpCredentialRevision 'qwen')
+    }
     Write-QwenJsonAtomically -Path $script:QwenUsagePath -Value $Usage -MutexName "UsageTrayPillQwenUsageWrite"
 }
 
@@ -516,6 +521,11 @@ function Get-QwenUsageSnapshot {
     if ($null -eq $usage) { return $null }
 
     $copy = $usage | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    if([string]$copy.credentialRevision -ne (Get-UtpCredentialRevision 'qwen')){
+        $copy.available=$false
+        foreach($item in @($copy.items)){$item.remainingPercent=$null}
+        return $copy
+    }
     $lastSuccess = Get-DateOrNull ([string]$copy.lastSuccessAt)
     if ($null -eq $lastSuccess -or $lastSuccess -gt (Get-Date).AddMinutes(1) -or ((Get-Date) - $lastSuccess).TotalHours -gt $script:QwenSnapshotMaxAgeHours) {
         $copy.available = $false
@@ -536,11 +546,12 @@ function Set-QwenFailureSnapshot {
         [int]$RetryAfterSeconds = 0
     )
 
+    $credentialRevision=Get-UtpCredentialRevision 'qwen'
     $previous = Read-QwenUsageSnapshotRaw
     $preserveCodes = @("network_error", "rate_limited", "server_error", "parse_error", "response_too_large")
     $items = @()
     $lastSuccessAt = ""
-    if ($Code -in $preserveCodes -and $null -ne $previous) {
+    if ($Code -in $preserveCodes -and $null -ne $previous -and [string]$previous.credentialRevision -eq $credentialRevision) {
         $lastSuccess = Get-DateOrNull ([string]$previous.lastSuccessAt)
         if ($null -ne $lastSuccess -and ((Get-Date) - $lastSuccess).TotalHours -le $script:QwenSnapshotMaxAgeHours) {
             $items = @(As-Array $previous.items)
@@ -551,6 +562,7 @@ function Set-QwenFailureSnapshot {
     Write-QwenUsageSnapshot ([pscustomobject]@{
         version = 1
         source = "qwencloud-token-plan"
+        credentialRevision = $credentialRevision
         available = ($items.Count -gt 0)
         stale = ($items.Count -gt 0)
         lastCheckedAt = Format-DateForStorage (Get-Date)
@@ -574,6 +586,7 @@ function Update-QwenUsage {
         catch [System.Threading.AbandonedMutexException] { $hasPollLock = $true }
         if (-not $hasPollLock) { return $false }
 
+        $credentialRevision=Get-UtpCredentialRevision 'qwen'
         $credentials = Get-QwenCredentials
         if ($null -eq $credentials) {
             throw (New-QwenException -Code "setup_required" -Message "Qwen Token Plan has not been set up.")
@@ -593,6 +606,7 @@ function Update-QwenUsage {
         Write-QwenUsageSnapshot ([pscustomobject]@{
             version = 1
             source = "qwencloud-token-plan"
+            credentialRevision = $credentialRevision
             available = $true
             stale = $false
             lastCheckedAt = $now

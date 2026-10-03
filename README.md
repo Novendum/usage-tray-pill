@@ -16,12 +16,19 @@ A small Windows utility for checking remaining **Codex, Claude, Antigravity, Ope
 
 **[Quick start](#quick-start)** · **[Provider setup](docs/PROVIDERS.md)** · **[What's changed](CHANGELOG.md)** · **[Report a bug](https://github.com/Novendum/usage-tray-pill/issues)**
 
+## What's new in rc.4
+
+**Quieter in the background. Clearer when data is delayed.** This stability update stops AGY's quota checks from opening an updater terminal, gives temporary Claude failures a clearly marked cache, and keeps one failed refresh from interrupting the other providers. Fullscreen hiding stays on by default.
+
+[Download v0.1.0-rc.4](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.4) · [Read the changes](CHANGELOG.md#010-rc4---2026-10-04)
+
 ## At home in your taskbar
 
 ![Actual UTP pills in light and dark themes, showing illustrative Codex and Claude allowances](docs/media/utp-pill-themes.png)
 
 - **A clear glance.** Bold text, smooth rounded edges and crisp icons. The pill follows your Windows taskbar's light or dark theme.
 - **A quiet interaction.** Click to cycle providers, right-click for actions. No hover popup. Transitions respect Windows animation preferences.
+- **Predictable visibility.** The pill hides when a full-screen app covers the primary taskbar and returns when the taskbar is exposed. You can disable full-screen hiding in Preferences.
 - **Freshness you can understand.** Background collection, refresh controls and explicit unavailable states. Missing data appears as `--`.
 - **Your choice of sources.** Select the Codex allowance bucket and enable optional integrations in Preferences. Disable OpenCode Go or Qwen without losing the saved connection.
 - **Local by design.** Settings and caches stay on your PC. No UTP account or telemetry service. Provider requests use the connections described in [Privacy](PRIVACY.md).

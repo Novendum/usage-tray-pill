@@ -1,6 +1,12 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
 function Check { param([bool]$Condition,[string]$Message) if(-not $Condition){throw $Message} }
+# Keep the real rendering logic, but never show a test pill on the desktop.
+$refreshBody=(Get-Command Refresh-TaskbarBadge).ScriptBlock.ToString().Replace('$script:BadgeForm.Show()','')
+Set-Item Function:Refresh-TaskbarBadge -Value ([scriptblock]::Create($refreshBody))
+function Test-TaskbarBadgeShouldHide { return $script:TestBadgeHidden }
+function Get-ClaudeUsageSnapshot { return $null }
+$script:TestBadgeHidden=$false
 $script:BadgeTheme='Light'
 Check ((Get-TaskbarBadgeColor).GetBrightness() -gt 0.9) 'Light taskbar theme must use a light pill'
 $script:BadgeTheme='Dark'
@@ -44,7 +50,6 @@ foreach($scale in @(1.0,1.25,1.5,1.75,2.0)) {
 $script:BadgeDpiScale=1.0
 $script:State=New-DefaultState
 function Get-SystemTrayIconTheme { return $script:TestTheme }
-function Test-ForegroundWindowFullscreen { return $false }
 function Set-BadgeDpiScaleFromWindow { return $false }
 function Set-BadgeTopMostNoActivate {}
 Ensure-TaskbarBadge
@@ -62,6 +67,29 @@ try {
             Check ($center.ToArgb() -eq (Get-TaskbarBadgeColor).ToArgb()) 'The actual rendered surface must match the selected theme'
         } finally {$bitmap.Dispose()}
     }
+    Set-TaskbarBadgeContent -Source claude
+    Start-BadgeSlideToSource -Source codex
+    $script:TestBadgeHidden=$true
+    $script:TestTheme='Dark'
+    Refresh-TaskbarBadge -GeometryOnly
+    $script:TestBadgeHidden=$false
+    Refresh-TaskbarBadge -GeometryOnly
+    Check ($script:BadgeLogo.Tag -eq 'codex|Dark') 'Leaving fullscreen must apply a theme change that happened while hidden'
+    Check ($script:BadgeSourceLabel.ForeColor.ToArgb() -eq [Drawing.Color]::FromArgb(224,226,233).ToArgb()) 'Restored text must use dark-theme foreground colors'
+    Check (-not [string]::IsNullOrWhiteSpace($script:BadgeRenderSignature)) 'Restoring the pill must complete its pending render'
+    Check (-not $script:BadgeAnimating -and $script:BadgeCurrentRow.Top -eq 0) 'A theme change must recover from an interrupted slide with aligned content'
+    Check (-not $script:BadgeForm.Visible) 'Rendering tests must never show a desktop pill'
+    $script:State.liveUsage.lastCheckedAt=(Get-Date).ToString('o')
+    $script:State.liveUsage.buckets=@([pscustomobject]@{limitId='codex';primaryRemainingPercent=76;primaryWindowDurationMins=10080;primaryResetsAt=(Get-Date).AddDays(1).ToString('o')})
+    Refresh-TaskbarBadge
+    Check ($script:BadgePrimaryPrefix.Text -eq '76%') 'The visible fixture must start at the original cached quota'
+    $script:TestBadgeHidden=$true
+    $script:State.liveUsage.buckets[0].primaryRemainingPercent=23
+    Refresh-TaskbarBadge
+    $script:TestBadgeHidden=$false
+    Refresh-TaskbarBadge -GeometryOnly
+    Check ($script:BadgePrimaryPrefix.Text -eq '23%') 'The first reveal must show quota changes received while fullscreen was active'
+    Check ($script:BadgeDisplayedSource -eq 'codex') 'Refreshing hidden content must preserve the selected provider'
     $bounds=Get-TaskbarBadgeBounds -Width 176
     Check ($bounds.Right -eq ([Windows.Forms.Screen]::PrimaryScreen.Bounds.Right - (ConvertTo-BadgePixels 248) - (ConvertTo-BadgePixels 16))) 'The pill must leave the increased gap next to the tray arrow'
 } finally {Dispose-TaskbarBadge}
