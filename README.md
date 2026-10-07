@@ -16,11 +16,11 @@ A small Windows utility for checking remaining **Codex, Claude, Antigravity, Ope
 
 **[Quick start](#quick-start)** · **[Provider setup](docs/PROVIDERS.md)** · **[What's changed](CHANGELOG.md)** · **[Report a bug](https://github.com/Novendum/usage-tray-pill/issues)**
 
-## What's new in rc.4
+## What's new in rc.5
 
-**Quieter in the background. Clearer when data is delayed.** This stability update stops AGY's quota checks from opening an updater terminal, gives temporary Claude failures a clearly marked cache, and keeps one failed refresh from interrupting the other providers. Fullscreen hiding stays on by default.
+**One start file. A smaller download.** Application code, setup helpers and developer tests now have their own folders. The users' ZIP includes what you need to run UTP, with a short guide and safe migration of this installation's old shortcuts. Development tests and promotional media stay in the source repository. All rc.4 stability fixes are retained.
 
-[Download v0.1.0-rc.4](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.4) · [Read the changes](CHANGELOG.md#010-rc4---2026-10-04)
+[Download v0.1.0-rc.5](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.5) · [Read the changes](CHANGELOG.md#010-rc5---2026-10-07)
 
 ## At home in your taskbar
 
@@ -47,7 +47,7 @@ You need **Windows 11**, **Windows PowerShell 5.1**, and a supported, signed-in 
 2. Review the scripts, then double-click **`Start-UsageTrayPill.cmd`**.
 3. Right-click the pill to open its menu. Open the overview and Preferences to choose your sources.
 
-No administrator rights are required. Keep the runtime `.ps1` and `.cs` files, launcher files and `assets` together; UTP runs from this folder.
+No administrator rights are required. Keep `src/`, `scripts/` and `assets/` beside the start file. The users' ZIP includes the app and optional setup helpers; development tests and promotional media stay in the source repository. See the [user guide](docs/USER_GUIDE.md) for upgrading from the older flat folder.
 
 | Provider | What you need | Integration |
 | --- | --- | --- |
@@ -65,15 +65,15 @@ Follow the [provider setup guide](docs/PROVIDERS.md) for connection steps, migra
 Run only the installers you want from Windows PowerShell in the extracted folder:
 
 ```powershell
-.\Install-DesktopShortcut.ps1
-.\Install-StartMenuShortcut.ps1
-.\Install-Startup.ps1
+.\scripts\Install-DesktopShortcut.ps1
+.\scripts\Install-StartMenuShortcut.ps1
+.\scripts\Install-Startup.ps1
 ```
 
 Claude's statusline integration is separate:
 
 ```powershell
-.\Install-ClaudeStatusLine.ps1
+.\scripts\Install-ClaudeStatusLine.ps1
 ```
 
 Installers preserve unrelated shortcuts and existing statuslines. Use `-Force` only when you deliberately want to replace one. Claude settings changes create a backup.
@@ -91,17 +91,17 @@ This does not change the permanent user or machine policy.
 <details>
 <summary><strong>Updating and uninstalling</strong></summary>
 
-Exit UTP before replacing its application files. Extract the complete update into the same folder, then launch it again. If you move the folder, recreate your shortcuts and Claude statusline integration from the new location.
+Exit UTP before replacing its application files. For the new folder layout, back up the old application folder and extract into an empty folder at the same path. Do not overlay the new ZIP on old files. Re-run the optional installers you used to migrate their old root-level paths safely. See the [upgrade instructions](docs/USER_GUIDE.md#upgrade-from-the-old-flat-folder).
 
 OpenCode Go users migrating from the dashboard adapter must supply a Go API key through setup. Old encrypted cookie records are preserved but no longer used.
 
 Remove the optional integrations independently:
 
 ```powershell
-.\Uninstall-Startup.ps1
-.\Uninstall-DesktopShortcut.ps1
-.\Uninstall-StartMenuShortcut.ps1
-.\Uninstall-ClaudeStatusLine.ps1
+.\scripts\Uninstall-Startup.ps1
+.\scripts\Uninstall-DesktopShortcut.ps1
+.\scripts\Uninstall-StartMenuShortcut.ps1
+.\scripts\Uninstall-ClaudeStatusLine.ps1
 ```
 
 Settings and caches remain in `%APPDATA%\UsageTrayPill`. Delete that directory yourself only if you also want to remove settings, notes and saved UTP connections.
@@ -112,16 +112,27 @@ Settings and caches remain in `%APPDATA%\UsageTrayPill`. Delete that directory y
 
 UTP is a **public open-source release candidate**. The repository contains the source; provider compatibility can change independently of UTP. See the [readiness record](docs/OPEN_SOURCE_READINESS.md) for what was tested and what remains open.
 
-Most active collectors normally check once a minute; enabled Qwen checks every two minutes. Cache changes reach the UI on a 500 ms tick. These are polling intervals, not a promise of instant provider updates. Authentication errors pause collection, and temporary errors use bounded retry delays.
+Codex, Antigravity and OpenCode Go normally check once a minute; Claude CLI checks every three minutes and enabled Qwen every two minutes. Cache changes reach the UI on a 500 ms tick. These are polling intervals, not a promise of instant provider updates. Authentication errors pause collection, and temporary errors use bounded retry delays.
 
 The [earlier demo](https://github.com/user-attachments/assets/1f7a0588-d80b-4f79-ab9f-c70e5b1f08a8) shows the original release-candidate design. The screenshots above represent the current code in this branch.
 
 ## Contribute
 
+The repository separates application code, maintenance scripts and tests:
+
+```text
+Start-UsageTrayPill.cmd   Start here
+src/                     App, collectors and native helpers
+scripts/                 Optional setup, removal and package builder
+tests/                   Development and regression checks
+assets/                  Runtime icons and branding
+docs/                    Guides, architecture and development notes
+```
+
 Bug reports, provider compatibility notes and focused pull requests are welcome. Please keep account data and credentials out of reports.
 
 ```powershell
-.\Test-UsageTrayPill.ps1
+.\tests\Test-UsageTrayPill.ps1
 ```
 
 Run tests in **Windows PowerShell 5.1**. Tests cover provider parsing, refresh lifecycle, interaction, DPI rendering and credential boundaries using isolated fixtures; passing offline tests does not prove every account or plan works.

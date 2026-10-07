@@ -1,6 +1,7 @@
-﻿$ErrorActionPreference='Stop'
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
+$ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Test-ProcessHelpers.ps1')
-. (Join-Path $PSScriptRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
+. (Join-Path $sourceRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
 function Check {param([bool]$Value,[string]$Message) if(-not $Value){throw $Message}}
 Check ((Format-RemainingPercent 0.4) -eq '<1%') 'Fractional allowance must not be displayed as exhausted'
 Check ((Format-RemainingPercent 0) -eq '0%') 'Zero must remain zero'
@@ -32,7 +33,7 @@ try {
     $script:State.planName='Preserve this note'
     Save-State
     $before=(Get-FileHash $script:DataPath).Hash
-    if(-not ('UtpUsageFileMonitor' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'UsageFileMonitor.cs')}
+    if(-not ('UtpUsageFileMonitor' -as [type])){Add-Type -Path (Join-Path $sourceRoot 'UsageFileMonitor.cs')}
     $monitor=New-Object UtpUsageFileMonitor $root
     [void]$monitor.ConsumeChanges()
     $mock=@'
@@ -68,7 +69,7 @@ while($null -ne ($line=[Console]::ReadLine())) {
     Remove-Item -LiteralPath (Join-Path $root 'reads.txt')
     $exe=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $ownerTicks=(Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks
-    $collector=Join-Path $PSScriptRoot 'Start-UsageCollector.ps1'
+    $collector=Join-Path $sourceRoot 'Start-UsageCollector.ps1'
     $process=Start-UtpHiddenTestProcess -FilePath $exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$collector+'"'),'-OwnerProcessId',$PID,'-OwnerStartTicks',$ownerTicks,'-DataDirectory',('"'+$root+'"'),'-Sources','codex')
     $cache=Join-Path $root 'codex-usage.json'
     $deadline=(Get-Date).AddSeconds(20)

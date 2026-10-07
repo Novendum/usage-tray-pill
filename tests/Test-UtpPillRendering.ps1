@@ -1,5 +1,6 @@
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
 $ErrorActionPreference='Stop'
-. (Join-Path $PSScriptRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
+. (Join-Path $sourceRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
 function Check { param([bool]$Condition,[string]$Message) if(-not $Condition){throw $Message} }
 # Keep the real rendering logic, but never show a test pill on the desktop.
 $refreshBody=(Get-Command Refresh-TaskbarBadge).ScriptBlock.ToString().Replace('$script:BadgeForm.Show()','')

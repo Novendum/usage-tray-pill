@@ -2,9 +2,11 @@
 
 ## Runtime
 
-`Start-UsageTrayPill.ps1` owns the WinForms tray icon, taskbar pill, settings, cache consumption, fullscreen detection, and shutdown lifecycle. `Start-UsageCollector.ps1` owns background quota collection.
+`src/Start-UsageTrayPill.ps1` owns the WinForms tray icon, taskbar pill, settings, cache consumption, fullscreen detection, and shutdown lifecycle. `src/Start-UsageCollector.ps1` owns background quota collection. Runtime helpers remain together in `src/`; shared runtime assets live in the root `assets/` folder.
 
-`Launch-UsageTrayPill.vbs` starts the main script without a visible console window. The CMD launcher delegates to this file.
+`src/Launch-UsageTrayPill.vbs` starts the main script without a visible console window. The root `Start-UsageTrayPill.cmd` launcher delegates to this file. Optional installers and uninstallers live in `scripts/`, with shared ownership checks for current and same-root legacy paths.
+
+`tests/Test-UsageTrayPill.ps1` runs the development suite in disposable profile directories. `scripts/Build-ReleasePackage.ps1` uses an explicit allowlist for the user ZIP, retaining runtime code, setup helpers, required assets and licenses while excluding tests, CI, build tools and promotional media. Its user README comes from `docs/USER_GUIDE.md`.
 
 `PillRenderer.cs` owns the pill's layered WinForms window and premultiplied-alpha bitmap presentation through `UpdateLayeredWindow`. Capsule curves, labels, and icons are composited onto the same surface. Offscreen controls retain layout metadata; the visible pill has no opaque child windows or binary window region. Native bitmap and device-context handles are released after each frame. Alpha coverage and idle-logo placement are tested at 100%, 125%, 150%, 175%, and 200% scaling.
 

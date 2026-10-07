@@ -1,9 +1,8 @@
 $ErrorActionPreference = "Stop"
 
-$managedScriptPath = Join-Path $PSScriptRoot "Update-ClaudeUsageFromStatusline.ps1"
-$powershellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-$managedCommand = "`"$powershellPath`" -NoProfile -ExecutionPolicy Bypass -File `"$managedScriptPath`""
-$legacyManagedCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$managedScriptPath`""
+. (Join-Path $PSScriptRoot "UtpInstallationHelpers.ps1")
+$installation = Get-UtpInstallationPaths
+
 $settingsPath = Join-Path (Join-Path $env:USERPROFILE ".claude") "settings.json"
 
 if (-not (Test-Path -LiteralPath $settingsPath)) {
@@ -14,7 +13,7 @@ if (-not (Test-Path -LiteralPath $settingsPath)) {
 $raw = Get-Content -LiteralPath $settingsPath -Raw -ErrorAction Stop
 $settings = $(if ([string]::IsNullOrWhiteSpace($raw)) { [pscustomobject]@{} } else { $raw | ConvertFrom-Json -ErrorAction Stop })
 $statusLine = $settings.statusLine
-if ($null -eq $statusLine -or [string]$statusLine.command -notin @($managedCommand, $legacyManagedCommand)) {
+if ($null -eq $statusLine -or -not (Test-UtpManagedClaudeCommand -Command ([string]$statusLine.command) -Installation $installation)) {
     Write-Host "No Claude statusline managed by this UTP installation was found."
     exit 0
 }

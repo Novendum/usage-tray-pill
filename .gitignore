@@ -40,3 +40,4 @@ desktop.ini
 # Test and coverage output
 TestResults/
 coverage/
+dist/

@@ -4,6 +4,15 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.5] - 2026-10-07
+
+### Changed
+
+- Organize application code in `src/`, developer tests in `tests/`, and optional installation/removal scripts in `scripts/`, with one root start file.
+- Add a dedicated users' ZIP built from an explicit runtime file list, with checksums and a short user guide; exclude development tests, build tools and promotional media.
+- Safely migrate this installation's legacy shortcuts and Claude statusline paths without overwriting unrelated integrations.
+- Isolate test data from the user's profile and verify the clean package after extraction to a path with spaces.
+
 ## [0.1.0-rc.4] - 2026-10-04
 
 ### Fixed

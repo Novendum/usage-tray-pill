@@ -1,6 +1,7 @@
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
-$source = Join-Path $PSScriptRoot 'BadgeVisibility.cs'
+$source = Join-Path $sourceRoot 'BadgeVisibility.cs'
 if (-not (Test-Path -LiteralPath $source)) { throw 'Badge visibility detector is missing.' }
 Add-Type -Path $source -ReferencedAssemblies System.Drawing
 function Check { param([bool]$Condition,[string]$Message) if (-not $Condition) { throw $Message } }

@@ -1,22 +1,48 @@
-﻿$ErrorActionPreference = "Stop"
+﻿$repoRoot = Split-Path -Parent $PSScriptRoot
+$sourceRoot = Join-Path $repoRoot 'src'
+$scriptsRoot = Join-Path $repoRoot 'scripts'
+$ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "Test-ProcessHelpers.ps1")
 
-$scriptPath = Join-Path $PSScriptRoot "Start-UsageTrayPill.ps1"
-$usageUpdaterPath = Join-Path $PSScriptRoot "Update-ClaudeUsageFromStatusline.ps1"
-$silentLauncherPath = Join-Path $PSScriptRoot "Launch-UsageTrayPill.vbs"
-$cmdLauncherPath = Join-Path $PSScriptRoot "Start-UsageTrayPill.cmd"
-$keeperPath = Join-Path $PSScriptRoot "Start-ClaudeUsageKeeper.ps1"
-$startupInstallerPath = Join-Path $PSScriptRoot "Install-Startup.ps1"
-$desktopUninstallerPath = Join-Path $PSScriptRoot "Uninstall-DesktopShortcut.ps1"
-$startMenuInstallerPath = Join-Path $PSScriptRoot "Install-StartMenuShortcut.ps1"
-$startMenuUninstallerPath = Join-Path $PSScriptRoot "Uninstall-StartMenuShortcut.ps1"
-$statusLineInstallerPath = Join-Path $PSScriptRoot "Install-ClaudeStatusLine.ps1"
-$statusLineUninstallerPath = Join-Path $PSScriptRoot "Uninstall-ClaudeStatusLine.ps1"
-$openCodeAdapterPath = Join-Path $PSScriptRoot "OpenCodeGo.ps1"
-$qwenAdapterPath = Join-Path $PSScriptRoot "QwenTokenPlan.ps1"
+# All child tests inherit disposable state and synthetic-only provider credentials.
+$testEnvironmentRoot = Join-Path ([IO.Path]::GetTempPath()) ('UtpSuite-' + [guid]::NewGuid().ToString('N'))
+$savedEnvironment = @{}
+foreach ($name in @('APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'OPENCODE_GO_API_KEY', 'QWEN_TOKEN_PLAN_COOKIE')) {
+    $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+}
+try {
+    foreach ($name in @('APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR')) {
+        $isolatedPath = Join-Path $testEnvironmentRoot $name
+        [void](New-Item -ItemType Directory -Path $isolatedPath -Force)
+        [Environment]::SetEnvironmentVariable($name, $isolatedPath, 'Process')
+    }
+    $env:OPENCODE_GO_API_KEY = ''
+    $env:QWEN_TOKEN_PLAN_COOKIE = ''
+$scriptPath = Join-Path $sourceRoot "Start-UsageTrayPill.ps1"
+$usageUpdaterPath = Join-Path $sourceRoot "Update-ClaudeUsageFromStatusline.ps1"
+$silentLauncherPath = Join-Path $sourceRoot "Launch-UsageTrayPill.vbs"
+$cmdLauncherPath = Join-Path $repoRoot "Start-UsageTrayPill.cmd"
+$keeperPath = Join-Path $sourceRoot "Start-ClaudeUsageKeeper.ps1"
+$startupInstallerPath = Join-Path $scriptsRoot "Install-Startup.ps1"
+$desktopUninstallerPath = Join-Path $scriptsRoot "Uninstall-DesktopShortcut.ps1"
+$startMenuInstallerPath = Join-Path $scriptsRoot "Install-StartMenuShortcut.ps1"
+$startMenuUninstallerPath = Join-Path $scriptsRoot "Uninstall-StartMenuShortcut.ps1"
+$statusLineInstallerPath = Join-Path $scriptsRoot "Install-ClaudeStatusLine.ps1"
+$statusLineUninstallerPath = Join-Path $scriptsRoot "Uninstall-ClaudeStatusLine.ps1"
+$openCodeAdapterPath = Join-Path $sourceRoot "OpenCodeGo.ps1"
+$qwenAdapterPath = Join-Path $sourceRoot "QwenTokenPlan.ps1"
 $windowsPowerShellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 
-foreach ($powerShellFile in @(Get-ChildItem -LiteralPath $PSScriptRoot -File -Filter "*.ps1")) {
+foreach ($directory in @('src', 'scripts', 'tests', 'assets')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $directory) -PathType Container)) {
+        throw "Required package directory is missing: $directory"
+    }
+}
+if (@(Get-ChildItem -LiteralPath $repoRoot -File | Where-Object Extension -in @('.ps1', '.cs', '.vbs')).Count) {
+    throw 'Runtime, management scripts and tests must live in their dedicated directories.'
+}
+
+foreach ($powerShellFile in @(Get-ChildItem -LiteralPath $sourceRoot, $scriptsRoot, $PSScriptRoot -File -Filter "*.ps1")) {
     $tokens = $null
     $parseErrors = $null
     [void][System.Management.Automation.Language.Parser]::ParseFile(
@@ -43,14 +69,13 @@ if ($silentLauncher -match "-OpenEditor") {
 }
 
 $cmdLauncher = Get-Content -LiteralPath $cmdLauncherPath -Raw
-if ($cmdLauncher -notmatch '%SystemRoot%\\System32\\wscript\.exe') {
+if ($cmdLauncher -notmatch '%SystemRoot%\\System32\\wscript\.exe' -or
+    $cmdLauncher -notmatch '%~dp0src\\Launch-UsageTrayPill\.vbs') {
     throw "CMD launcher must use the hidden VBS launcher through an absolute Windows path."
 }
 
 $startupInstaller = Get-Content -LiteralPath $startupInstallerPath -Raw
-if ($startupInstaller -notmatch 'Launch-UsageTrayPill\.vbs' -or $startupInstaller -notmatch 'wscript\.exe') {
-    throw "Startup installer must use the hidden UTP launcher."
-}
+# Launcher target, arguments and hidden window behavior are covered with real isolated links in Test-UtpInstallationLayout.ps1.
 if ($startupInstaller -notmatch '\[switch\]\$Force' -or $startupInstaller -notmatch '\$isManaged') {
     throw "Startup installer must protect a same-named shortcut not owned by UTP."
 }
@@ -78,17 +103,13 @@ if ($startMenuInstaller -notmatch 'Usage Tray Pill\.lnk' -or
 if ($startMenuUninstaller -notmatch '\[switch\]\$Force' -or $startMenuUninstaller -notmatch '\$isManaged') {
     throw "Start menu uninstaller must not remove a same-named shortcut not owned by UTP without -Force."
 }
-$startupUninstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot "Uninstall-Startup.ps1") -Raw
+$startupUninstaller = Get-Content -LiteralPath (Join-Path $scriptsRoot "Uninstall-Startup.ps1") -Raw
 if ($startupUninstaller -notmatch '\[switch\]\$Force' -or $startupUninstaller -notmatch '\$isManaged') {
     throw "Startup uninstaller must not remove a same-named shortcut not owned by UTP without -Force."
 }
 
 $statusLineInstaller = Get-Content -LiteralPath $statusLineInstallerPath -Raw
-if ($statusLineInstaller -notmatch 'System32\\WindowsPowerShell\\v1\.0\\powershell\.exe' -or
-    $statusLineInstaller -notmatch '\$managedCommand = "`"\$powershellPath`" .* -File `"\$scriptPath`""' -or
-    $statusLineInstaller -notmatch '\$existingCommand -in @\(\$managedCommand, \$legacyManagedCommand\)') {
-    throw "Claude statusline installer must use absolute, quoted PowerShell and script paths."
-}
+
 if ($statusLineInstaller -notmatch '\[System\.IO\.File\]::Replace') {
     throw "Claude statusline installer must replace settings atomically."
 }
@@ -96,9 +117,7 @@ if (-not (Test-Path -LiteralPath $statusLineUninstallerPath)) {
     throw "Claude statusline uninstaller is missing."
 }
 $statusLineUninstaller = Get-Content -LiteralPath $statusLineUninstallerPath -Raw
-if ($statusLineUninstaller -notmatch '\$statusLine\.command -notin @\(\$managedCommand, \$legacyManagedCommand\)') {
-    throw "Claude statusline uninstaller must remove only exact current or legacy UTP commands."
-}
+
 if ($statusLineInstaller -notmatch '\[switch\]\$Force' -or $statusLineInstaller -notmatch 'A different Claude statusline is already configured') {
     throw "Claude statusline installer must protect an existing integration behind explicit -Force."
 }
@@ -143,8 +162,8 @@ try {
 
     & $statusLineInstallerPath -Force *> $null
     $installedSettings = Get-Content -LiteralPath $testSettingsPath -Raw | ConvertFrom-Json
-    if ([string]$installedSettings.statusLine.command -notmatch [regex]::Escape($usageUpdaterPath)) {
-        throw "Claude statusline installer must configure the UTP updater when -Force is used."
+    if ([string]$installedSettings.statusLine.command -cne ('"{0}" -NoProfile -ExecutionPolicy Bypass -File "{1}"' -f $windowsPowerShellPath, $usageUpdaterPath)) {
+        throw "Claude statusline installer must configure exact absolute quoted PowerShell and updater paths when -Force is used."
     }
     if ([string]$installedSettings.theme -ne "dark") {
         throw "Claude statusline installer must preserve all other settings."
@@ -168,7 +187,7 @@ $trayScript = Get-Content -LiteralPath $scriptPath -Raw
 $usageUpdater = Get-Content -LiteralPath $usageUpdaterPath -Raw
 $openCodeAdapter = Get-Content -LiteralPath $openCodeAdapterPath -Raw
 $qwenAdapter = Get-Content -LiteralPath $qwenAdapterPath -Raw
-$gitIgnore = Get-Content -LiteralPath (Join-Path $PSScriptRoot ".gitignore") -Raw
+$gitIgnore = Get-Content -LiteralPath (Join-Path $repoRoot ".gitignore") -Raw
 if ($openCodeAdapter -notmatch '/zen/go/v1/usage' -or $openCodeAdapter -notmatch 'API key') { throw 'OpenCode must describe the API key usage route.' }
 if ($qwenAdapter -notmatch 'reads usage from QwenCloud dashboard interfaces every two minutes' -or
     $qwenAdapter -notmatch 'session is encrypted for your Windows account only') {
@@ -177,10 +196,10 @@ if ($qwenAdapter -notmatch 'reads usage from QwenCloud dashboard interfaces ever
 if ($gitIgnore -notmatch 'assets/\*-source\.png') {
     throw "Local high-resolution source images must remain outside the release."
 }
-$qwenLogoPath = Join-Path $PSScriptRoot "assets\qwen-logo.png"
+$qwenLogoPath = Join-Path $repoRoot "assets\qwen-logo.png"
 $blockedProviderAssets = @(
-    (Join-Path $PSScriptRoot "assets\openai-logo.png"),
-    (Join-Path $PSScriptRoot "assets\claude-logo.png")
+    (Join-Path $repoRoot "assets\openai-logo.png"),
+    (Join-Path $repoRoot "assets\claude-logo.png")
 )
 foreach ($blockedProviderAsset in $blockedProviderAssets) {
     if (Test-Path -LiteralPath $blockedProviderAsset) {
@@ -205,7 +224,7 @@ if ($trayScript -notmatch 'Get-ClaudeIconCandidatePaths' -or
     $trayScript -notmatch 'Get-CodexIconPath') {
     throw "ChatGPT and Claude indicators must be loaded from locally installed apps."
 }
-$externalAdapter=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'ExternalUsageAdapters.ps1') -Raw
+$externalAdapter=Get-Content -LiteralPath (Join-Path $sourceRoot 'ExternalUsageAdapters.ps1') -Raw
 if ($externalAdapter -notmatch 'Update-AntigravityCliUsage' -or $trayScript -match 'LanguageServerService/GetUserStatus') {
     throw 'Antigravity must use the CLI adapter without an internal loopback fallback.'
 }
@@ -247,7 +266,7 @@ if ($trayScript -notmatch 'StandardError\.BaseStream\.CopyToAsync\(\[System\.IO\
 }
 if ($trayScript -match '\$script:BadgeForm\.Region\s*=') { throw 'A binary window region must not clip the alpha-blended pill.' }
 
-$openCodeGoAdapterPath = Join-Path $PSScriptRoot "OpenCodeGo.ps1"
+$openCodeGoAdapterPath = Join-Path $sourceRoot "OpenCodeGo.ps1"
 if (-not (Test-Path -LiteralPath $openCodeGoAdapterPath)) {
     throw "OpenCode Go adapter is missing."
 }
@@ -388,7 +407,7 @@ if ($trayScript -match 'Next: \$\(Format-TimeLeft') {
     throw "The tray tooltip must not change on every refresh solely because the remaining minutes decrease."
 }
 
-$desktopInstallerPath = Join-Path $PSScriptRoot "Install-DesktopShortcut.ps1"
+$desktopInstallerPath = Join-Path $scriptsRoot "Install-DesktopShortcut.ps1"
 $desktopInstaller = Get-Content -LiteralPath $desktopInstallerPath -Raw
 if ($desktopInstaller -notmatch 'ValidateSet\("Light", "Dark"\)') {
     throw "The desktop installer must support light and dark themes."
@@ -458,30 +477,35 @@ if ($process.ExitCode -ne 0) {
 
 $relocatedRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("Usage Tray Pill relocation " + [Guid]::NewGuid().ToString("N"))
 try {
-    New-Item -ItemType Directory -Path $relocatedRoot | Out-Null
-    foreach ($runtimeFile in @(
-        "Start-UsageTrayPill.ps1",
-        "Start-ClaudeUsageKeeper.ps1",
-        "Update-ClaudeUsageFromStatusline.ps1",
-        "OpenCodeGo.ps1",
-        "QwenTokenPlan.ps1"
-        "PillRenderer.cs"
-        "BadgeVisibility.cs"
-        "ExternalUsageAdapters.ps1"
-        "CollectorPolicy.ps1"
-        "RequestDeadline.cs"
-        "OwnedUsageProcess.cs"
-    )) {
-        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $runtimeFile) -Destination $relocatedRoot
+    $relocatedSourceRoot = Join-Path $relocatedRoot "src"
+    New-Item -ItemType Directory -Path $relocatedSourceRoot -Force | Out-Null
+    Get-ChildItem -LiteralPath $sourceRoot -File | Copy-Item -Destination $relocatedSourceRoot
+    Copy-Item -LiteralPath (Join-Path $repoRoot "assets") -Destination $relocatedRoot -Recurse
+
+    # Resolve actual asset helpers from a path with spaces; never start the GUI.
+    $assetProbePath = Join-Path $relocatedRoot 'Test-RelocatedAssets.ps1'
+    $assetProbe = @'
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'src\Start-UsageTrayPill.ps1') -LibraryOnly
+foreach ($theme in @('Light', 'Dark')) {
+    $expectedIcon = Join-Path $PSScriptRoot ('assets\tray-icon-' + $theme.ToLowerInvariant() + '.ico')
+    $expectedImage = Join-Path $PSScriptRoot ('assets\tray-icon-' + $theme.ToLowerInvariant() + '.png')
+    if ((Get-TrayIconPath -Theme $theme) -ne $expectedIcon -or
+        (Get-TrayIconImagePath -Theme $theme) -ne $expectedImage) {
+        throw 'Relocated runtime must resolve both icon themes from the package assets directory.'
     }
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "assets") -Destination $relocatedRoot -Recurse
+}
+'@
+    [IO.File]::WriteAllText($assetProbePath, $assetProbe, (New-Object Text.UTF8Encoding $true))
+    & $windowsPowerShellPath -NoProfile -ExecutionPolicy Bypass -File $assetProbePath
+    if ($LASTEXITCODE -ne 0) { throw 'Relocated asset integration test failed.' }
 
     $relocatedProcess = Start-UtpHiddenTestProcess -FilePath $windowsPowerShellPath -ArgumentList @(
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        ("`"" + (Join-Path $relocatedRoot "Start-UsageTrayPill.ps1") + "`""),
+        ("`"" + (Join-Path $relocatedSourceRoot "Start-UsageTrayPill.ps1") + "`""),
         "-SelfTest"
     )
 
@@ -503,8 +527,20 @@ if ($LASTEXITCODE -ne 0 -or ($usageOutput -notcontains "Selftest OK")) {
     throw "Claude usage updater selftest failed."
 }
 
-foreach ($regressionScript in @('Test-UtpClaudeCache.ps1', 'Test-UtpVisibility.ps1', 'Test-UtpReliability.ps1', 'Test-UtpInteractions.ps1', 'Test-UtpPillRendering.ps1', 'Test-OpenCodeGoApi.ps1', 'Test-ExternalUsageAdapters.ps1', 'Test-UtpCollector.ps1', 'Test-UtpRefreshRecovery.ps1', 'Test-UtpPresentationRecovery.ps1', 'Test-UtpProviderRecovery.ps1', 'Test-UtpProcessOwnership.ps1', 'Test-UtpAgyUpdater.ps1')) {
+foreach ($regressionScript in @('Test-UtpClaudeCache.ps1', 'Test-UtpVisibility.ps1', 'Test-UtpReliability.ps1', 'Test-UtpInteractions.ps1', 'Test-UtpPillRendering.ps1', 'Test-OpenCodeGoApi.ps1', 'Test-ExternalUsageAdapters.ps1', 'Test-UtpCollector.ps1', 'Test-UtpRefreshRecovery.ps1', 'Test-UtpPresentationRecovery.ps1', 'Test-UtpProviderRecovery.ps1', 'Test-UtpProcessOwnership.ps1', 'Test-UtpAgyUpdater.ps1', 'Test-UtpInstallationLayout.ps1', 'Test-UtpReleasePackage.ps1')) {
     & $windowsPowerShellPath -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $regressionScript)
     if ($LASTEXITCODE -ne 0) { throw "$regressionScript failed." }
 }
 Write-Output 'All UTP tests OK'
+
+}
+finally {
+    foreach ($name in $savedEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+    }
+    $resolvedTestRoot = [IO.Path]::GetFullPath($testEnvironmentRoot)
+    if ($resolvedTestRoot.StartsWith([IO.Path]::GetTempPath(), [StringComparison]::OrdinalIgnoreCase) -and
+        (Split-Path $resolvedTestRoot -Leaf) -like 'UtpSuite-*') {
+        Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

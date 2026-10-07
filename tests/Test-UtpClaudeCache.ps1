@@ -1,5 +1,6 @@
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
 $ErrorActionPreference='Stop'
-. (Join-Path $PSScriptRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
+. (Join-Path $sourceRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
 function Check([bool]$Value,[string]$Message){if(-not $Value){throw $Message}}
 $now=[DateTimeOffset]::UtcNow
 $previous=[pscustomobject]@{source='claude-code-control';available=$true;lastSuccessAt=$now.AddMinutes(-3).ToString('o');lastCheckedAt=$now.AddMinutes(-3).ToString('o');items=@(

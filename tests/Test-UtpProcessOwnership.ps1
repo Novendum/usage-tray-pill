@@ -1,5 +1,6 @@
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
 $ErrorActionPreference='Stop'
-. (Join-Path $PSScriptRoot 'ExternalUsageAdapters.ps1')
+. (Join-Path $sourceRoot 'ExternalUsageAdapters.ps1')
 . (Join-Path $PSScriptRoot 'Test-ProcessHelpers.ps1')
 function Check([bool]$Value,[string]$Message){if(-not $Value){throw $Message}}
 $root=Join-Path $env:TEMP ('UtpOwnershipTest-'+[guid]::NewGuid().ToString('N'))
@@ -83,7 +84,7 @@ Add-Type 'using System;using System.Runtime.InteropServices;public static class 
     # The outer adapter puts PowerShell in a job before it starts another adapter.
     $leaf=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("[Console]::WriteLine('nested-job-ok')"))
     $nestedCode=@"
-. '$PSScriptRoot\ExternalUsageAdapters.ps1'
+. '$sourceRoot\ExternalUsageAdapters.ps1'
 `$result=Invoke-UtpExternalUsageCommand '$exe' @('-NoProfile','-EncodedCommand','$leaf') -TimeoutMilliseconds 4000
 [Console]::WriteLine(`$result.Output.Trim())
 "@

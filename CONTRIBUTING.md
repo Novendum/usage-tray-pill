@@ -10,10 +10,20 @@ Use Windows 11 with Windows PowerShell 5.1. Clone the repository to any director
 Run the full test suite before proposing a change:
 
 ```powershell
-.\Test-UsageTrayPill.ps1
+.\tests\Test-UsageTrayPill.ps1
 ```
 
 ## Pull requests
+
+Application code lives in `src/`, setup and build scripts in `scripts/`, and developer tests in `tests/`. Keep `Start-UsageTrayPill.cmd` as the root entry point.
+
+Build a users' package after the test suite passes:
+
+```powershell
+.\scripts\Build-ReleasePackage.ps1 -Version 0.1.0-rc.5-local
+```
+
+The explicit file list excludes tests, build tools, internal design notes and promotional media. Versioned outputs go to `dist/`; existing packages are never overwritten. Building a package does not publish a GitHub release.
 
 - Keep provider adapters fail-safe and preserve the last valid usage snapshot.
 - Add a regression test for behavior changes.

@@ -1,5 +1,6 @@
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
 $ErrorActionPreference='Stop'
-. (Join-Path $PSScriptRoot 'ExternalUsageAdapters.ps1')
+. (Join-Path $sourceRoot 'ExternalUsageAdapters.ps1')
 function Check([bool]$Value,[string]$Message){if(-not $Value){throw $Message}}
 function Resolve-UtpAntigravityCli {return 'fixture-agy.exe'}
 function Resolve-UtpClaudeUsageCli {return 'fixture-claude.exe'}

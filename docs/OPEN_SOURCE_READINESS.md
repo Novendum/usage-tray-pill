@@ -1,5 +1,13 @@
 # Release readiness
 
+## v0.1.0-rc.5 — organized source and lean user package
+
+Prepared on 2026-10-07 from rc.4. Runtime files live in `src/`, development checks in `tests/` and installation/removal helpers in `scripts/`. The root CMD remains the entry point. Existing same-root shortcuts and Claude statusline commands migrate safely; unrelated integrations remain protected.
+
+The package builder uses an explicit 42-file list. It excludes tests, CI, build tools, design notes and promotional media while retaining runtime assets, setup helpers and licenses. Its README is generated from the user guide with package-relative links. Source and package links, relative output paths, overwrite protection and extracted runtime checks are covered by regression tests.
+
+Run the full Windows PowerShell 5.1 suite from the source checkout. The users' ZIP deliberately has no developer test runner; validate it using the package test and its offline `src/Start-UsageTrayPill.ps1 -SelfTest` in isolated application data. Final commit, checksums and public-download verification belong in the [rc.5 release notes](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.5). The manual account/device limits below still apply, so this remains a prerelease.
+
 ## v0.1.0-rc.4 — stability update
 
 Prepared on 2026-10-04 from the public rc.3 baseline. This candidate carries the tested local stability fixes onto the existing public history.

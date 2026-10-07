@@ -1,5 +1,6 @@
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
 $ErrorActionPreference='Stop'
-. (Join-Path $PSScriptRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
+. (Join-Path $sourceRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
 $root=Join-Path $env:TEMP ('UtpRefreshRecovery-'+[guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $root)
 $script:DataDir=$root

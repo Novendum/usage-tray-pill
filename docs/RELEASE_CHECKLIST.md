@@ -16,7 +16,7 @@ Use this checklist for each candidate. Check results in its GitHub Actions run a
 - [ ] Open a normal pull request and pass the required `powershell-51` and `secret-scan` checks.
 - [ ] Merge with maintainer authorization and verify the main-branch checks.
 - [ ] Build the release archive from the exact merged commit.
-- [ ] Extract the complete archive to a Windows path containing spaces and rerun all tests.
+- [ ] Run the complete source test suite, including package construction and validation. Extract the users' ZIP to a Windows path containing spaces and run its offline runtime SelfTest; developer tests must not ship in the users' ZIP.
 - [ ] Verify file inventory, source hashes, relative documentation links and the package secret scan.
 - [ ] Publish the authorized version as a prerelease, with a SHA-256 checksum and clear upgrade instructions.
 - [ ] Download the published assets and confirm their hashes against the tested package.

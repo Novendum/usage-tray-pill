@@ -1,6 +1,7 @@
 ﻿param([string]$OutputDirectory = '')
+$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
+. (Join-Path $sourceRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
 Add-Type -WarningAction SilentlyContinue -ReferencedAssemblies System.Windows.Forms,System.Drawing -TypeDefinition @'
 public class UtpTestForm : System.Windows.Forms.Form {
     protected override bool ShowWithoutActivation { get { return true; } }
