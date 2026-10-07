@@ -9,6 +9,8 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 $OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 if (Test-Path -LiteralPath $OutputDirectory) { throw 'Test output must be a new directory; existing data is never overwritten.' }
 [void][IO.Directory]::CreateDirectory($OutputDirectory)
+# Match the expanded paths returned by file enumeration and PSScriptRoot.
+$OutputDirectory = (Get-Item -LiteralPath $OutputDirectory).FullName
 $result = & $builder -Version '0.0.0-package-test' -OutputDirectory (Join-Path $OutputDirectory 'artifact')
 $extractRoot = Join-Path $OutputDirectory 'Extracted user package with spaces'
 Add-Type -AssemblyName System.IO.Compression.FileSystem

@@ -1,6 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-$testRoot = Join-Path $env:TEMP ("UTP install user's fixture " + [guid]::NewGuid().ToString('N'))
+# Windows runners may expose TEMP through an 8.3 alias; PSScriptRoot expands it.
+$temporaryRoot = (Get-Item -LiteralPath $env:TEMP).FullName
+$testRoot = Join-Path $temporaryRoot ("UTP install user's fixture " + [guid]::NewGuid().ToString('N'))
 $fixtureRoot = Join-Path $testRoot 'installation'
 $scriptsFolder = Join-Path $fixtureRoot 'scripts'
 $savedProfile = $env:USERPROFILE
@@ -146,7 +148,7 @@ try {
 finally {
     $env:USERPROFILE = $savedProfile
     $resolvedTestRoot = [IO.Path]::GetFullPath($testRoot)
-    $resolvedTemp = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+    $resolvedTemp = [IO.Path]::GetFullPath($temporaryRoot).TrimEnd('\') + '\'
     if ($resolvedTestRoot.StartsWith($resolvedTemp, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $resolvedTestRoot)) {
         Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
     }
