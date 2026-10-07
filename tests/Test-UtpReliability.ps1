@@ -1,16 +1,17 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
+$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $tokens = $null; $errors = $null
-$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'Start-UsageTrayPill.ps1'), [ref]$tokens, [ref]$errors)
+$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $sourceRoot 'Start-UsageTrayPill.ps1'), [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Runtime parse failed' }
 $definitions = @{}
 foreach ($node in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     $definitions[$node.Name] = $node.Extent.Text
     . ([scriptblock]::Create($node.Extent.Text))
 }
-. (Join-Path $PSScriptRoot 'OpenCodeGo.ps1')
-. (Join-Path $PSScriptRoot 'QwenTokenPlan.ps1')
+. (Join-Path $sourceRoot 'OpenCodeGo.ps1')
+. (Join-Path $sourceRoot 'QwenTokenPlan.ps1')
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('UtpReliability-' + [guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $testRoot)
 $script:DataDir = $testRoot
@@ -96,7 +97,7 @@ try {
         Check $readSucceeded 'Sequential JSON responses must not be lost'
     } finally { if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(2000) }; $process.Dispose() }
 
-    $runtimeText = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'Start-UsageTrayPill.ps1'))
+    $runtimeText = [IO.File]::ReadAllText((Join-Path $sourceRoot 'Start-UsageTrayPill.ps1'))
     $uiText = $definitions['Start-TrayApp'] + $definitions['Show-MainWindow']
     Check ($uiText -notmatch '\[void\]\(Update-(Live|Antigravity)Usage\)') 'UI handlers must never poll providers synchronously'
     Check ($definitions.ContainsKey('Start-ProviderUsageRefresh')) 'Providers must share a bounded background refresh lifecycle'

@@ -2,6 +2,8 @@
 
 This document is a release control for every visual asset distributed with Usage Tray Pill.
 
+The users' ZIP contains runtime icons and their licenses. Demo media and launch artwork described below remain in the source repository and are not included in that ZIP.
+
 ## UTP application identity
 
 The following files are custom UTP artwork and are not provider logos:

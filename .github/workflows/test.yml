@@ -18,7 +18,7 @@ jobs:
           persist-credentials: false
       - name: Run UTP tests
         shell: powershell
-        run: .\Test-UsageTrayPill.ps1
+        run: .\tests\Test-UsageTrayPill.ps1
 
   secret-scan:
     runs-on: ubuntu-latest

@@ -1,8 +1,9 @@
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
 $ErrorActionPreference = 'Stop'
-$adapter = Join-Path $PSScriptRoot 'ExternalUsageAdapters.ps1'
+$adapter = Join-Path $sourceRoot 'ExternalUsageAdapters.ps1'
 if (-not (Test-Path -LiteralPath $adapter)) { throw 'External usage adapter is missing.' }
 . $adapter
-. (Join-Path $PSScriptRoot 'CollectorPolicy.ps1')
+. (Join-Path $sourceRoot 'CollectorPolicy.ps1')
 
 function Assert-ExternalTest([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }

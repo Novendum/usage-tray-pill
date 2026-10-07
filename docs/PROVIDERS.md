@@ -15,7 +15,7 @@ The background collector keeps this connection open and normally refreshes every
 The supported source is the Claude Code statusline JSON. Install the UTP statusline integration with:
 
 ```powershell
-.\Install-ClaudeStatusLine.ps1
+.\scripts\Install-ClaudeStatusLine.ps1
 ```
 
 Claude documents 5-hour and 7-day usage fields in its statusline. UTP may also read Claude Desktop's local usage history as a fallback.

@@ -2227,7 +2227,7 @@ function New-BadgeLogoImage {
         }
 
         if ($Source -eq "qwen") {
-            $qwenIconPath = Join-Path $PSScriptRoot "assets\qwen-logo.png"
+            $qwenIconPath = Join-Path (Split-Path $PSScriptRoot -Parent) "assets\qwen-logo.png"
             if (-not (Test-Path -LiteralPath $qwenIconPath)) {
                 throw "The official Qwen provider logo is missing."
             }
@@ -3284,7 +3284,7 @@ function Get-TrayIconPath {
         [string]$Theme = "Light"
     )
 
-    $path = Join-Path $PSScriptRoot ("assets\tray-icon-" + $Theme.ToLowerInvariant() + ".ico")
+    $path = Join-Path (Split-Path $PSScriptRoot -Parent) ("assets\tray-icon-" + $Theme.ToLowerInvariant() + ".ico")
     if (Test-Path -LiteralPath $path) {
         return $path
     }
@@ -3298,7 +3298,7 @@ function Get-TrayIconImagePath {
         [string]$Theme = "Light"
     )
 
-    $path = Join-Path $PSScriptRoot ("assets\tray-icon-" + $Theme.ToLowerInvariant() + ".png")
+    $path = Join-Path (Split-Path $PSScriptRoot -Parent) ("assets\tray-icon-" + $Theme.ToLowerInvariant() + ".png")
     if (Test-Path -LiteralPath $path) {
         return $path
     }

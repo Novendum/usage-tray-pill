@@ -4,10 +4,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$launcherPath = Join-Path $PSScriptRoot "Launch-UsageTrayPill.vbs"
+. (Join-Path $PSScriptRoot "UtpInstallationHelpers.ps1")
+$installation = Get-UtpInstallationPaths
 $programsFolder = [Environment]::GetFolderPath("Programs")
 $shortcutPath = Join-Path $programsFolder "Usage Tray Pill.lnk"
-$wscriptPath = Join-Path $env:SystemRoot "System32\wscript.exe"
 
 if (-not (Test-Path -LiteralPath $shortcutPath)) {
     Write-Host "The Start menu shortcut has already been removed."
@@ -16,7 +16,7 @@ if (-not (Test-Path -LiteralPath $shortcutPath)) {
 
 $shell = New-Object -ComObject WScript.Shell
 $existing = $shell.CreateShortcut($shortcutPath)
-$isManaged = [string]$existing.TargetPath -ieq $wscriptPath -and [string]$existing.Arguments -eq "`"$launcherPath`""
+$isManaged = Test-UtpManagedShortcut -Shortcut $existing -Installation $installation
 if (-not $isManaged -and -not $Force) {
     throw "The shortcut named Usage Tray Pill does not belong to this checkout. Use -Force only when you intentionally want to remove it."
 }

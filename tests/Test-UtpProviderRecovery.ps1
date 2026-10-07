@@ -1,6 +1,7 @@
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Test-ProcessHelpers.ps1')
-$repo=$PSScriptRoot
+$repo=$sourceRoot
 $root=Join-Path $env:TEMP ('UtpProviderRecovery-'+[guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $root)
 $failures=@()

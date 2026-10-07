@@ -4,11 +4,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$scriptPath = Join-Path $PSScriptRoot "Update-ClaudeUsageFromStatusline.ps1"
+. (Join-Path $PSScriptRoot "UtpInstallationHelpers.ps1")
+$installation = Get-UtpInstallationPaths
+
+$scriptPath = $installation.Updater
 if (-not (Test-Path -LiteralPath $scriptPath)) {
     throw "Claude statusline script not found: $scriptPath"
 }
-$powershellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+$powershellPath = $installation.PowerShell
 if (-not (Test-Path -LiteralPath $powershellPath)) {
     throw "Windows PowerShell not found: $powershellPath"
 }
@@ -40,9 +43,8 @@ catch {
 
 $existingStatusLine = $settings.statusLine
 $existingCommand = $(if ($null -ne $existingStatusLine) { [string]$existingStatusLine.command } else { "" })
-$managedCommand = "`"$powershellPath`" -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
-$legacyManagedCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
-$isManagedStatusLine = $existingCommand -in @($managedCommand, $legacyManagedCommand)
+$managedCommand = $installation.ManagedCommand
+$isManagedStatusLine = Test-UtpManagedClaudeCommand -Command $existingCommand -Installation $installation
 if ($null -ne $existingStatusLine -and -not $isManagedStatusLine -and -not $Force) {
     throw "A different Claude statusline is already configured. Use -Force only when you intentionally want UTP to replace it."
 }

@@ -1,5 +1,6 @@
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
 $ErrorActionPreference='Stop'
-. (Join-Path $PSScriptRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
+. (Join-Path $sourceRoot 'Start-UsageTrayPill.ps1') -LibraryOnly
 function Check {param([bool]$Condition,[string]$Message) if(-not $Condition){throw $Message}}
 # Entirely synthetic data; no caches, credentials, processes or provider calls.
 function Test-CodexRunning {return $false}

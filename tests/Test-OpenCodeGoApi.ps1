@@ -1,5 +1,6 @@
+﻿$sourceRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src'
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'OpenCodeGo.ps1')
+. (Join-Path $sourceRoot 'OpenCodeGo.ps1')
 function Assert-Api { param([bool]$Condition, [string]$Message) if (-not $Condition) { throw $Message } }
 function Assert-ApiError {
     param([scriptblock]$Action, [string]$Code)
