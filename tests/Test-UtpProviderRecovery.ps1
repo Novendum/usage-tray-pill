@@ -93,12 +93,17 @@ function Ensure-DataDirectory {}
 function Close-CodexConnection {}
 function Get-ProviderCachePath {param($Source) Join-Path $script:DataDir 'qwen-token-plan-usage.json'}
 function Get-DateOrNull {param($Value) if($Value){[datetime]::Parse($Value)}}
-function Set-ProviderRefreshFailure {throw 'Unexpected fixture failure'}
+function Set-ProviderRefreshFailure {Add-Content (Join-Path $script:DataDir 'refresh-failures.txt') 'reported';throw 'Synthetic reporting failure'}
 '@|Set-Content (Join-Path $fixture 'Start-UsageTrayPill.ps1')
     @'
 function Update-QwenUsage {
- Add-Content (Join-Path $script:DataDir 'attempts.txt') 'fixture'
+ # The test reads this file concurrently; share access and retry so neither side sees a lock.
+ for($try=0;$try -lt 40;$try++){
+  try{$stream=[IO.File]::Open((Join-Path $script:DataDir 'attempts.txt'),[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite);try{$bytes=[Text.Encoding]::ASCII.GetBytes("fixture`r`n");$stream.Write($bytes,0,$bytes.Length)}finally{$stream.Dispose()};break}
+  catch [IO.IOException]{Start-Sleep -Milliseconds 25}
+ }
  $scenario=Get-Content (Join-Path $script:DataDir 'scenario.json') -Raw|ConvertFrom-Json
+ if($scenario.throw){throw 'Synthetic provider exception'}
  Write-OpenCodeGoJsonAtomically -Path $script:QwenUsagePath -Value ([pscustomobject]@{lastCheckedAt=(Get-Date).ToString('o');errorCode=$scenario.errorCode;retryAfterSeconds=$scenario.retryAfterSeconds;available=$false;items=@()}) -MutexName ('Audit-'+$PID)
  return $false
 }
@@ -109,7 +114,18 @@ function Update-QwenUsage {
     function Start-FixtureCollector {
         Start-UtpHiddenTestProcess -FilePath $exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+(Join-Path $fixture 'Start-UsageCollector.ps1')+'"'),'-OwnerProcessId',$PID,'-OwnerStartTicks',$ownerTicks,'-DataDirectory',('"'+$fixture+'"'),'-Sources','qwen')
     }
-    function Read-Attempts {if(Test-Path $attempts){@(Get-Content $attempts).Count}else{0}}
+    function Read-SharedLines([string]$Path) {
+        if(-not (Test-Path -LiteralPath $Path)){return 0}
+        for($try=0;$try -lt 40;$try++){
+            try{
+                $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite)
+                try{$reader=New-Object IO.StreamReader($stream);return @(($reader.ReadToEnd() -split "`r?`n")|Where-Object {$_}).Count}finally{$stream.Dispose()}
+            } catch [IO.IOException] {Start-Sleep -Milliseconds 25}
+        }
+        throw "$Path stayed locked"
+    }
+    function Read-Attempts {Read-SharedLines $attempts}
+    $reportedFailures=Join-Path $fixture 'refresh-failures.txt'
     function Wait-Attempts([int]$Count){$until=(Get-Date).AddSeconds(8);while((Read-Attempts) -lt $Count -and (Get-Date) -lt $until -and -not $process.HasExited){Start-Sleep -Milliseconds 100};Start-Sleep -Milliseconds 400}
     $process=Start-FixtureCollector;Wait-Attempts 1
     Check ((Read-Attempts) -eq 1) 'Initial collection must occur'
@@ -140,6 +156,16 @@ function Update-QwenUsage {
     @{qwen=[guid]::NewGuid().ToString('N')}|ConvertTo-Json|Set-Content (Join-Path $fixture 'refresh-requests.json')
     Wait-Attempts ($before+1)
     Check ((Read-Attempts) -eq ($before+1)) 'Explicit refresh must recover from a corrupt source schedule'
+    Check ((Read-SharedLines $reportedFailures) -eq 0) 'Synthetic scenarios must not raise unexpected refresh failures'
+    # A provider exception whose failure report also throws must not end the worker or the collector.
+    @{errorCode='rate_limited';retryAfterSeconds=600;throw=$true}|ConvertTo-Json|Set-Content (Join-Path $fixture 'scenario.json')
+    $before=Read-Attempts
+    @{qwen=[guid]::NewGuid().ToString('N')}|ConvertTo-Json|Set-Content (Join-Path $fixture 'refresh-requests.json')
+    Wait-Attempts ($before+1)
+    $until=(Get-Date).AddSeconds(8);while((Read-SharedLines $reportedFailures) -lt 1 -and (Get-Date) -lt $until){Start-Sleep -Milliseconds 100}
+    Start-Sleep -Milliseconds 1500
+    Check ((Read-SharedLines $reportedFailures) -eq 1) 'A provider exception must be reported once'
+    Check (-not $process.HasExited) 'A failing failure report must not stop the collector'
 } finally {
     if($null -ne $process){Stop-OwnedRefreshProcess $process}
     $env:OPENCODE_GO_API_KEY=$oldGo;$env:QWEN_TOKEN_PLAN_COOKIE=$oldQwen

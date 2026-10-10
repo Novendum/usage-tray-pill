@@ -72,7 +72,8 @@ $worker={
                 }
             } catch {
                 # Never send raw provider/process errors to the UI or logs.
-                Set-ProviderRefreshFailure -Source $Source -Message 'Usage could not be refreshed.'
+                # Reporting a failure must not end this source's worker (and with it the collector).
+                try {Set-ProviderRefreshFailure -Source $Source -Message 'Usage could not be refreshed.'} catch {}
             }
             $snapshot=$null
             try {$snapshot=Get-Content -LiteralPath $cache -Raw|ConvertFrom-Json} catch {}
@@ -84,7 +85,9 @@ $worker={
             }
             $next=if($seconds -lt 0){[datetime]::MaxValue}else{(Get-Date).AddSeconds($seconds)}
             if($ok){$reset=Get-NextQuotaReset -Snapshot $snapshot;if($null -ne $reset -and $reset.AddSeconds(1) -lt $next){$next=$reset.AddSeconds(1)}}
-            Write-OpenCodeGoJsonAtomically -Path $schedulePath -Value ([pscustomobject]@{nextAttemptAt=$next.ToString('o');failures=$failures;credentialRevision=$credentialRevision}) -MutexName "UsageTrayPillSchedule-$Source"
+            # A busy or locked schedule file must not stop the worker; the in-memory deadline still applies
+            # and is persisted again after the next attempt.
+            try {Write-OpenCodeGoJsonAtomically -Path $schedulePath -Value ([pscustomobject]@{nextAttemptAt=$next.ToString('o');failures=$failures;credentialRevision=$credentialRevision}) -MutexName "UsageTrayPillSchedule-$Source"} catch {}
         }
     } finally { Close-CodexConnection }
 }
