@@ -4,6 +4,21 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.6] - 2026-10-10
+
+### Added
+
+- Show two providers side by side in the pill, for example ChatGPT and Claude. Choose the layout, the left and right provider, and whether each side shows all allowance windows or only the tightest one in the new **Pill** tab, with a live preview. Right-click > **Show two providers** toggles the layout.
+- In two-provider mode, click the left or right side of the pill to switch only that side. Sides never show the same provider, and a paused provider keeps its saved side.
+
+### Changed
+
+- Two-provider labels shorten to `5h`, `wk` and `mo` and are measured without GDI padding, so both providers fit in one capsule at every DPI. The single-provider pill is unchanged and stays the default.
+
+### Upgrade notes
+
+- Exit UTP and replace the complete application folder. Existing settings keep the single-provider pill until you choose two providers.
+
 ## [0.1.0-rc.5] - 2026-10-07
 
 ### Changed

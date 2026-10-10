@@ -110,7 +110,46 @@ public class UtpPillForm : Form
         }
     }
 
+    // Free-standing segments (the two-provider pill and its preview) use the
+    // same native text path as the label-based single-provider pill.
+    public static void DrawText(Bitmap target, string value, Font font, Color foreColor, Color backColor, Rectangle rect, bool alignRight, Rectangle clip)
+    {
+        if (target == null || font == null || String.IsNullOrEmpty(value) || rect.Width <= 0 || rect.Height <= 0) return;
+        DrawNativeText(target, value, font, foreColor, backColor, alignRight, rect, clip);
+    }
+
+    public static void DrawPicture(Bitmap target, Image image, Rectangle rect, Rectangle clip)
+    {
+        if (target == null || image == null || rect.Width <= 0 || rect.Height <= 0) return;
+        using (var graphics = Graphics.FromImage(target)) {
+            graphics.SetClip(clip);
+            if (image.Width == rect.Width && image.Height == rect.Height)
+                graphics.DrawImageUnscaled(image, rect.Left, rect.Top);
+            else {
+                graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                graphics.DrawImage(image, rect);
+            }
+        }
+    }
+
+    // Provider divider: whole device pixels only, so it stays crisp at every DPI.
+    // It is drawn inside the opaque interior and never touches the alpha edge.
+    public static void DrawDivider(Bitmap target, Rectangle rect, Color color)
+    {
+        if (target == null || rect.Width <= 0 || rect.Height <= 0) return;
+        using (var graphics = Graphics.FromImage(target))
+        using (var brush = new SolidBrush(color)) {
+            graphics.SmoothingMode = SmoothingMode.None;
+            graphics.FillRectangle(brush, rect);
+        }
+    }
+
     private static void DrawNativeText(Bitmap target, Label label, Rectangle rect, Rectangle viewport)
+    {
+        DrawNativeText(target, label.Text, label.Font, label.ForeColor, label.BackColor, label.TextAlign == ContentAlignment.MiddleRight, rect, viewport);
+    }
+
+    private static void DrawNativeText(Bitmap target, string value, Font font, Color foreColor, Color background, bool alignRight, Rectangle rect, Rectangle viewport)
     {
         Rectangle area = Rectangle.Intersect(Rectangle.Intersect(rect, viewport), new Rectangle(Point.Empty, target.Size));
         if (area.Width <= 0 || area.Height <= 0) return;
@@ -118,12 +157,11 @@ public class UtpPillForm : Form
         // using the same GDI text engine as native labels, then copy glyph pixels
         // into the opaque interior. Never overwrite the capsule's alpha edge.
         using (var text = new Bitmap(rect.Width, rect.Height, PixelFormat.Format32bppRgb)) {
-            Color background = label.BackColor;
             using (var graphics = Graphics.FromImage(text)) {
                 graphics.Clear(background);
                 var flags = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter;
-                flags |= label.TextAlign == ContentAlignment.MiddleRight ? TextFormatFlags.Right : TextFormatFlags.Left;
-                TextRenderer.DrawText(graphics, label.Text, label.Font, new Rectangle(Point.Empty, text.Size), label.ForeColor, background, flags);
+                flags |= alignRight ? TextFormatFlags.Right : TextFormatFlags.Left;
+                TextRenderer.DrawText(graphics, value, font, new Rectangle(Point.Empty, text.Size), foreColor, background, flags);
             }
             var sourceRect = new Rectangle(area.Left - rect.Left, area.Top - rect.Top, area.Width, area.Height);
             BitmapData source = null, destination = null;

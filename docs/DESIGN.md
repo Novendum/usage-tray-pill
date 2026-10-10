@@ -11,6 +11,7 @@ Creative direction was delegated by the owner. Native Windows typography, focus,
 - Workspace: paper #F5F4F1, white content, ink #24262C, muted #636875, magenta #D02279.
 - Segoe UI / Segoe UI Semibold: native platform voice. Numerical values are prominent, labels compact, unavailable states explicit.
 - Pill labels and values use bold Segoe UI at the same readable size. Do not downgrade period labels to small regular text; maintain strong contrast in both taskbar themes.
+- Two-provider pill: each side is logo + bold label/value pairs at the same size as the single pill; period labels shorten to `5h`, `wk`, `mo`. Sides are separated by a quiet one-device-pixel divider in the border tone, never by color blocks. Values reserve two digits so routine changes do not resize the capsule.
 - Rasterize pill text with native GDI at final pixel size on its known opaque background, then preserve the capsule alpha mask during composition. Generate icons at the final DPI size; never enlarge a 22-pixel intermediate image.
 - Provider rows are flat, with dividers and generous vertical rhythm. Quota tracks represent remaining percentage and never show a fake value for unavailable data.
 - Primary actions are magenta; secondary actions are quiet and clearly keyboard-focusable.

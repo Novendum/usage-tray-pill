@@ -77,6 +77,32 @@ try {
     & $script:RefreshMainWindow
     Check ($script:MainWindowControls.Resets.Items[0].Selected) 'Background refresh must preserve the selected reset'
 
+    # The Pill tab applies layout and side choices immediately and previews the real renderer.
+    $pillTab=$tabs.TabPages | Where-Object Text -eq 'Pill'
+    $pill=$script:MainWindowControls.Pill
+    Check ($null -ne $pillTab -and $pillTab.Controls.Contains($pill.Strip)) 'The overview must offer a Pill tab'
+    Check ($pill.Single.Checked -and -not $pill.Left.Enabled -and -not $pill.Swap.Enabled) 'The Pill tab must reflect the single-provider default'
+    $click.Invoke($pill.Dual,@([EventArgs]::Empty)) | Out-Null
+    Check ($script:State.settings.taskbarBadgeLayout -eq 'dual' -and $pill.Dual.Checked -and $pill.Left.Enabled -and $pill.Right.Enabled) 'Choosing two providers must apply and enable the side choices'
+    Check ($null -ne $pill.Preview.Image -and $pill.Preview.Image.Width -eq (ConvertTo-BadgePixels (Get-TaskbarBadgeData -Source dual).Width)) 'The preview must render the actual two-provider pill'
+    Check ($pill.Left.SelectedItem.Id -eq 'codex' -and $pill.Right.SelectedItem.Id -eq 'claude') 'Side choices must show the saved providers'
+    $commit=[Windows.Forms.ComboBox].GetMethod('OnSelectionChangeCommitted',[Reflection.BindingFlags]'Instance,NonPublic')
+    $pill.Right.SelectedItem=@($pill.Right.Items | Where-Object Id -eq 'antigravity')[0]
+    $commit.Invoke($pill.Right,@([EventArgs]::Empty)) | Out-Null
+    Check ((@(Get-TaskbarBadgeDualSources) -join ',') -eq 'codex,antigravity') 'Choosing the right provider must apply'
+    $click.Invoke($pill.Swap,@([EventArgs]::Empty)) | Out-Null
+    Check ((@(Get-TaskbarBadgeDualSources) -join ',') -eq 'antigravity,codex' -and $pill.Left.SelectedItem.Id -eq 'antigravity') 'Swap must exchange both sides and update the choices'
+    $pill.Detail.SelectedIndex=1
+    $commit.Invoke($pill.Detail,@([EventArgs]::Empty)) | Out-Null
+    Check ($script:State.settings.taskbarBadgeDualDetail -eq 'tightest') 'The windows choice must apply'
+    $saved=Get-Content -LiteralPath $script:DataPath -Raw | ConvertFrom-Json
+    Check ($saved.settings.taskbarBadgeLayout -eq 'dual' -and (@($saved.settings.taskbarBadgeDualSources) -join ',') -eq 'antigravity,codex') 'Pill choices must be saved with the other settings'
+    Set-TaskbarBadgePreference -Slot 0 -Source codex
+    Set-TaskbarBadgePreference -Slot 1 -Source claude
+    Set-TaskbarBadgePreference -Detail all
+    $click.Invoke($pill.Single,@([EventArgs]::Empty)) | Out-Null
+    Check ($script:State.settings.taskbarBadgeLayout -eq 'single' -and -not $pill.Left.Enabled) 'Choosing one provider must restore the single pill'
+
     # A delayed synthetic provider exercises the real process lifecycle with no provider requests.
     $workerPath=Join-Path $testRoot 'worker.ps1'
     $workerCode=@'
@@ -164,6 +190,14 @@ while (-not (Test-Path -LiteralPath $release)) {
         [Windows.Forms.Application]::DoEvents()
         $bitmap=New-Object Drawing.Bitmap $script:MainForm.Width,$script:MainForm.Height
         try { $script:MainForm.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle 0,0,$bitmap.Width,$bitmap.Height)); $bitmap.Save((Join-Path $OutputDirectory 'preferences.png')) } finally { $bitmap.Dispose() }
+        Set-TaskbarBadgePreference -Layout dual
+        $tabs.SelectedTab=$tabs.TabPages | Where-Object Text -eq 'Pill'
+        [Windows.Forms.Application]::DoEvents()
+        $bitmap=New-Object Drawing.Bitmap $script:MainForm.Width,$script:MainForm.Height
+        try { $script:MainForm.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle 0,0,$bitmap.Width,$bitmap.Height)); $bitmap.Save((Join-Path $OutputDirectory 'pill-tab.png')) } finally { $bitmap.Dispose() }
+        $bitmap=New-TaskbarBadgeBitmap
+        try { $bitmap.Save((Join-Path $OutputDirectory 'pill-dual.png')) } finally { $bitmap.Dispose() }
+        Set-TaskbarBadgePreference -Layout single
         # Render the production pill at 200% DPI on an editorial comparison board.
         # No screenshot, account cache, or provider request is used for these pixels.
         $board=New-Object Drawing.Bitmap 1200,480
