@@ -4,6 +4,13 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [Unreleased]
+
+### Fixed
+
+- Keep the background collector running when reporting a provider failure or saving a source schedule fails. Previously such a secondary error could stop the worker and with it collection for every provider until UTP restarted it. Pauses and safety rules are unchanged.
+- Make the provider-recovery regression test immune to concurrent file access, and add a check that a failing failure report never stops the collector.
+
 ## [0.1.0-rc.6] - 2026-10-10
 
 ### Added
