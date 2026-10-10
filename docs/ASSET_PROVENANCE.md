@@ -67,13 +67,11 @@ Guidance last reviewed: 2026-07-26.
 - `docs/media/utp-two-providers.png` (2026-10-10, rc.6): release artwork for the two-provider pill. The large light pill (300%) and the dark taskbar pill (125%) are drawn by the production renderer (`New-TaskbarBadgeSegmentBitmap`); quota values are synthetic. The bloom background, headline, abstract taskbar tiles, clock and feature line are composed with GDI+ around those renders and are illustrative; no third-party app icons are depicted beyond the provider indicators inside the pills. No screenshot, account cache or provider request was used.
 
 - `docs/media/utp-promo.mp4` (2026-10-10): a 12-second promo film (1920x1080, 30 fps, H.264 with AAC stereo, -14 LUFS integrated, -1 dBFS peak), rendered locally with HyperFrames from an HTML/GSAP composition. It is an animated product illustration, not a screen recording: the pill is reconstructed with the app's Segoe UI Bold styling, the provider indicators are the same 192 px icons UTP renders, and all quota values are synthetic. It carries no version number so it stays valid across releases. Sound effects are recordings from Pixabay used under the [Pixabay Content License](https://pixabay.com/service/license-summary/) (bundled with HyperFrames media-use); the music bed was generated locally with Meta's MusicGen (`facebook/musicgen-small`). No account cache, provider request, voice-over or stock footage was used.
-- `docs/media/utp-promo-poster.png`: a frame from that film at 5.0 s, scaled to 1280x720 with a play button and duration label added for the README link.
 
-The README opens with the promo film's poster and labels it as an animated illustration with illustrative values; the generated cover remains launch artwork for `docs/LAUNCH.md`. Older demo media remains historical and is labeled accordingly; it is not evidence of the current appearance.
+The README opens with the promo film (played from a GitHub video attachment of `utp-promo.mp4`) and labels it as an animated illustration with illustrative values; the generated cover remains launch artwork for `docs/LAUNCH.md`. Older demo media remains historical and is labeled accordingly; it is not evidence of the current appearance.
 
 - `utp-launch-cover.png` SHA-256: `858184d120325525eb1e2eb044a84759eb05d7eef9d3fcd52d24b99887cd7f17`
 - `utp-pill-themes.png` SHA-256: `57d790f55bee07545a13f15ba15a9a9c468def624a23f6e5bed2037ecc29a35c`
 - `utp-overview.png` SHA-256: `9a1fb2086b2e6f005733abf8d72fd1c4678083bbd08aff7ca82498f34553f023`
 - `utp-two-providers.png` SHA-256: `2ac39c971b4724baa4cc45f9e24b6b903c8d2cee79cd794d96fc5296cce7b658`
 - `utp-promo.mp4` SHA-256: `fd0593d192461cbc643de1026866b53794129afab3812a27ce65709947e305c7`
-- `utp-promo-poster.png` SHA-256: `b7b15c64b396be24bd227f24b6169075340d987af85ee6b3ae15ce689542afb4`
