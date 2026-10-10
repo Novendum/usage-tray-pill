@@ -10,7 +10,10 @@
   <img src="https://img.shields.io/badge/platform-Windows_11-2563eb" alt="Windows 11">
 </p>
 
-![Small pill. Clear limits. AI usage, in your Windows taskbar.](docs/media/utp-launch-cover.png)
+<p align="center">
+  <a href="docs/media/utp-promo.mp4"><img src="docs/media/utp-promo-poster.png" alt="Play the 12-second Usage Tray Pill promo: one pill opens into two providers, switches one side and follows the dark taskbar theme"></a>
+</p>
+<p align="center"><a href="docs/media/utp-promo.mp4"><strong>▶ Watch the 12-second tour</strong></a> (sound on) · animated product illustration with illustrative values</p>
 
 A small Windows utility for checking remaining **Codex, Claude, Antigravity, OpenCode Go and Qwen Token Plan** allowances from your taskbar. Click to switch providers. Open the overview when you want the details.
 
