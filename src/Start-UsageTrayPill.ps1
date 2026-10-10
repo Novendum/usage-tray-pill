@@ -225,6 +225,17 @@ $script:BadgeItemGap = 8
 $script:BadgeMinimumWidth = 176
 $script:BadgeTextLeft = 38
 $script:BadgeHorizontalChrome = 44
+# Two-provider pill: logical spacing around each logo, between windows and around the divider.
+$script:BadgeDualPadLeft = 13
+$script:BadgeDualLogoGap = 6
+$script:BadgeDualValueGap = 5
+$script:BadgeDualItemGap = 12
+$script:BadgeDualDividerGap = 12
+$script:BadgeDualPadRight = 13
+$script:BadgeDualData = $null
+$script:BadgeDualFrame = $null
+$script:BadgeDualLogoCache = @{}
+$script:BadgeTextWidthCache = @{}
 $script:BadgeDpiScale = 1.0
 try { $script:BadgeDpiScale = [Math]::Max(0.75, [Math]::Min(3.0, [UsageTrayPillNative]::GetPrimaryMonitorDpi() / 96.0)) } catch {
 }
@@ -372,6 +383,9 @@ function New-DefaultState {
             showTaskbarBadge = $true
             hideTaskbarBadgeInFullscreen = $true
             taskbarBadgeDefaultSource = "codex"
+            taskbarBadgeLayout = "single"
+            taskbarBadgeDualSources = @("codex", "claude")
+            taskbarBadgeDualDetail = "all"
             codexLimitId = "codex"
             keepClaudeCodeAlive = $false
             claudeControlEnabled = $false
@@ -447,6 +461,9 @@ function Normalize-State {
     Ensure-Property -Target $State.settings -Name "liveUsagePollIntervalMinutes" -Value 5
     Ensure-Property -Target $State.settings -Name "showTaskbarBadge" -Value $true
     Ensure-Property -Target $State.settings -Name "taskbarBadgeDefaultSource" -Value "codex"
+    Ensure-Property -Target $State.settings -Name "taskbarBadgeLayout" -Value "single"
+    Ensure-Property -Target $State.settings -Name "taskbarBadgeDualSources" -Value @("codex", "claude")
+    Ensure-Property -Target $State.settings -Name "taskbarBadgeDualDetail" -Value "all"
     Ensure-Property -Target $State.settings -Name "hideTaskbarBadgeInFullscreen" -Value $true
     Ensure-Property -Target $State.settings -Name "codexLimitId" -Value "codex"
     Ensure-Property -Target $State.settings -Name "claudeControlEnabled" -Value $false
@@ -468,6 +485,18 @@ function Normalize-State {
     }
     if ([string]$State.settings.taskbarBadgeDefaultSource -notin @("codex", "claude", "antigravity", "opencodego", "qwen")) {
         $State.settings.taskbarBadgeDefaultSource = "codex"
+    }
+    if ([string]$State.settings.taskbarBadgeLayout -notin @("single", "dual")) {
+        $State.settings.taskbarBadgeLayout = "single"
+    }
+    $dualSources = @(As-Array $State.settings.taskbarBadgeDualSources | ForEach-Object { [string]$_ })
+    if ($dualSources.Count -ne 2 -or $dualSources[0] -eq $dualSources[1] -or
+        @($dualSources | Where-Object { $_ -notin @("codex", "claude", "antigravity", "opencodego", "qwen") }).Count -gt 0) {
+        $dualSources = @("codex", "claude")
+    }
+    $State.settings.taskbarBadgeDualSources = $dualSources
+    if ([string]$State.settings.taskbarBadgeDualDetail -notin @("all", "tightest")) {
+        $State.settings.taskbarBadgeDualDetail = "all"
     }
     if ($null -eq $State.settings.keepClaudeCodeAlive) {
         $State.settings.keepClaudeCodeAlive = $false
@@ -1656,8 +1685,53 @@ function Get-NextTaskbarBadgeSource {
     return $sources[($index + 1) % $sources.Count]
 }
 
+function Get-TaskbarBadgeLayout {
+    if ($null -ne $script:State -and [string]$script:State.settings.taskbarBadgeLayout -eq "dual") { return "dual" }
+    return "single"
+}
+
+function Get-TaskbarBadgeTargetSource {
+    if ((Get-TaskbarBadgeLayout) -eq "dual") { return "dual" }
+    return Get-TaskbarBadgeDefaultSource
+}
+
+function Get-TaskbarBadgeDualSources {
+    $available = @(Get-TaskbarBadgeSources)
+    $saved = @()
+    if ($null -ne $script:State) { $saved = @(As-Array $script:State.settings.taskbarBadgeDualSources | ForEach-Object { [string]$_ }) }
+    $resolved = @()
+    for ($slot = 0; $slot -lt 2; $slot++) {
+        $source = if ($slot -lt $saved.Count) { $saved[$slot] } else { "" }
+        if ($source -notin $available -or $source -in $resolved) {
+            # A disabled provider keeps its saved slot; borrow an unused provider until it returns.
+            $candidates = @($available | Where-Object { $_ -notin $resolved -and $_ -notin $saved }) + @($available | Where-Object { $_ -notin $resolved })
+            $source = $candidates[0]
+        }
+        $resolved += $source
+    }
+    return @($resolved)
+}
+
+function Get-NextTaskbarBadgeDualSource {
+    param([int]$Slot)
+
+    $sources = @(Get-TaskbarBadgeDualSources)
+    $available = @(Get-TaskbarBadgeSources)
+    $other = $sources[1 - $Slot]
+    $index = [Array]::IndexOf($available, $sources[$Slot])
+    for ($step = 1; $step -le $available.Count; $step++) {
+        $candidate = $available[($index + $step) % $available.Count]
+        if ($candidate -ne $other) { return $candidate }
+    }
+    return $sources[$Slot]
+}
+
 function Get-TaskbarBadgeData {
     param([string]$Source)
+
+    if ($Source -eq "dual") {
+        return Get-TaskbarBadgeDualData
+    }
 
     $neutralColor = if ($script:BadgeTheme -eq 'Dark') { [System.Drawing.Color]::FromArgb(196,198,208) } else { [System.Drawing.Color]::FromArgb(82,88,100) }
 
@@ -1841,6 +1915,299 @@ function Get-AntigravityDisplayItems {
     }
 }
 
+function Get-BadgeCompactLabel {
+    param([string]$Label)
+    # Two providers share one capsule: period labels stay bold and full-size, only shorter.
+    return (($Label -replace '\bweekly$', 'wk') -replace '\bmonthly$', 'mo')
+}
+
+function Get-BadgeItemPercent {
+    param($Item)
+    $text = [string]$Item.Text
+    if ($text -eq '<1%') { return 0.5 }
+    if ($text -match '^(\d+)%$') { return [double]$Matches[1] }
+    return $null
+}
+
+function Get-BadgeTextWidth {
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return 0 }
+    $key = "$Text|$script:BadgeDpiScale|$script:BadgeLabelFontSize"
+    if (-not $script:BadgeTextWidthCache.ContainsKey($key)) {
+        if ($script:BadgeTextWidthCache.Count -gt 256) { $script:BadgeTextWidthCache = @{} }
+        $font = New-BadgeFont -PointSize $script:BadgeLabelFontSize -Bold $true
+        $surface = New-Object System.Drawing.Bitmap 1, 1
+        $graphics = [System.Drawing.Graphics]::FromImage($surface)
+        try {
+            # Only the device-context overload honours NoPadding; the plain overload adds about 10 px.
+            $measured = [System.Windows.Forms.TextRenderer]::MeasureText(
+                $graphics,
+                $Text,
+                $font,
+                (New-Object System.Drawing.Size 1000, (ConvertTo-BadgePixels 28)),
+                ([System.Windows.Forms.TextFormatFlags]::SingleLine -bor [System.Windows.Forms.TextFormatFlags]::NoPadding)
+            ).Width
+            $script:BadgeTextWidthCache[$key] = [int][Math]::Ceiling(($measured / $script:BadgeDpiScale) + 1)
+        }
+        finally {
+            $graphics.Dispose()
+            $surface.Dispose()
+            $font.Dispose()
+        }
+    }
+    return $script:BadgeTextWidthCache[$key]
+}
+
+function Get-TaskbarBadgeSegment {
+    param(
+        [string]$Source,
+        [string]$Detail = "all"
+    )
+
+    $data = Get-TaskbarBadgeData -Source $Source
+    $windows = @($data.Items | Where-Object { $_.Label -ne 'cache' })
+    $marks = @($data.Items | Where-Object { $_.Label -eq 'cache' })
+    if ($Detail -eq "tightest" -and $windows.Count -gt 1) {
+        # The most restrictive known window decides how long the provider stays usable.
+        # Ties keep the first (shortest) window; unknown values never win.
+        $tightest = $null
+        foreach ($window in $windows) {
+            $percent = Get-BadgeItemPercent $window
+            if ($null -ne $percent -and ($null -eq $tightest -or $percent -lt (Get-BadgeItemPercent $tightest))) { $tightest = $window }
+        }
+        $windows = @(if ($null -ne $tightest) { $tightest } else { $windows[0] })
+    }
+    $items = @(foreach ($item in (@($windows) + @($marks))) {
+        [pscustomobject]@{ Label = (Get-BadgeCompactLabel ([string]$item.Label)); Text = [string]$item.Text; Color = $item.Color }
+    })
+    return [pscustomobject]@{ Source = $Source; Items = $items; Cached = [bool]$data.Cached }
+}
+
+function Get-TaskbarBadgeSegmentLayout {
+    param(
+        [object]$Segment,
+        [double]$Origin
+    )
+
+    # Logical pixels from the left edge of the pill, converted at final DPI while drawing.
+    $parts = @()
+    $x = $Origin + 22 + $script:BadgeDualLogoGap
+    $items = @($Segment.Items)
+    for ($index = 0; $index -lt $items.Count; $index++) {
+        $item = $items[$index]
+        if ($index -gt 0) { $x += $script:BadgeDualItemGap }
+        $labelWidth = Get-BadgeTextWidth -Text ([string]$item.Label)
+        $parts += [pscustomobject]@{ Kind = 'label'; Text = [string]$item.Label; X = $x; Width = $labelWidth; Color = $null }
+        $x += $labelWidth
+        if (-not [string]::IsNullOrEmpty([string]$item.Text)) {
+            $x += $script:BadgeDualValueGap
+            # Reserve two digits so routine changes never resize the pill; only 100% is wider.
+            $valueWidth = [Math]::Max((Get-BadgeTextWidth -Text ([string]$item.Text)), (Get-BadgeTextWidth -Text '00%'))
+            $parts += [pscustomobject]@{ Kind = 'value'; Text = [string]$item.Text; X = $x; Width = $valueWidth; Color = $item.Color }
+            $x += $valueWidth
+        }
+    }
+    return [pscustomobject]@{ Source = $Segment.Source; Start = $Origin; LogoX = $Origin; End = $x; Parts = $parts; Items = $items }
+}
+
+function Get-TaskbarBadgeDualData {
+    param(
+        [string[]]$Sources = @(Get-TaskbarBadgeDualSources),
+        [string]$Detail = $(if ($null -ne $script:State) { [string]$script:State.settings.taskbarBadgeDualDetail } else { "all" })
+    )
+
+    $x = [double]$script:BadgeDualPadLeft
+    $segments = @()
+    $dividers = @()
+    $items = @()
+    for ($index = 0; $index -lt $Sources.Count; $index++) {
+        if ($index -gt 0) {
+            $x += $script:BadgeDualDividerGap
+            $dividers += $x
+            $x += 1 + $script:BadgeDualDividerGap
+        }
+        $segment = Get-TaskbarBadgeSegmentLayout -Segment (Get-TaskbarBadgeSegment -Source $Sources[$index] -Detail $Detail) -Origin $x
+        $segments += $segment
+        # Provider markers keep the render signature unique when two sides swap.
+        $items += [pscustomobject]@{ Label = "@" + $segment.Source; Text = ""; Color = $null }
+        $items += @($segment.Items)
+        $x = $segment.End
+    }
+    return [pscustomobject]@{
+        Source = "dual"
+        SourceText = ""
+        Sources = @($Sources)
+        Segments = @($segments)
+        Dividers = @($dividers)
+        Items = @($items)
+        Width = [Math]::Max($script:BadgeMinimumWidth, [int][Math]::Ceiling($x + $script:BadgeDualPadRight))
+    }
+}
+
+function Get-TaskbarBadgeSingleLayout {
+    param([object]$Data)
+
+    # Mirrors Set-BadgeRowContent so the Pill tab preview matches the single-provider pill.
+    $parts = @()
+    $x = [double]$script:BadgeTextLeft
+    $items = @($Data.Items)
+    for ($index = 0; $index -lt [Math]::Min(3, $items.Count); $index++) {
+        $item = $items[$index]
+        if ($index -gt 0) { $x += $script:BadgeItemGap }
+        $labelWidth = Get-BadgeLabelWidth -Text ([string]$item.Label)
+        $parts += [pscustomobject]@{ Kind = 'label'; Text = [string]$item.Label; X = $x; Width = $labelWidth; Color = $null }
+        $x += $labelWidth + $script:BadgeLabelValueGap
+        $parts += [pscustomobject]@{ Kind = 'value'; Text = [string]$item.Text; X = $x; Width = $script:BadgeValueWidth; Color = $item.Color }
+        $x += $script:BadgeValueWidth
+    }
+    $segment = [pscustomobject]@{ Source = $Data.Source; Start = 13; LogoX = 13; End = $x; Parts = $parts; Items = $items }
+    return [pscustomobject]@{ Source = $Data.Source; Segments = @($segment); Dividers = @(); Items = $items; Width = [int]$Data.Width }
+}
+
+function Get-TaskbarBadgeDividerColor {
+    if ($script:BadgeTheme -ne 'Dark') { return [System.Drawing.Color]::FromArgb(206,211,220) }
+    return [System.Drawing.Color]::FromArgb(82,85,96)
+}
+
+function Get-BadgeSegmentLogo {
+    param(
+        [string]$Source,
+        [int]$Size
+    )
+
+    $key = "$Source|$script:BadgeTheme|$Size"
+    if (-not $script:BadgeDualLogoCache.ContainsKey($key)) {
+        $script:BadgeDualLogoCache[$key] = New-BadgeLogoImage -Size $Size -Source $Source -DarkSurface:($script:BadgeTheme -eq 'Dark')
+    }
+    return $script:BadgeDualLogoCache[$key]
+}
+
+function Clear-BadgeSegmentLogoCache {
+    foreach ($image in @($script:BadgeDualLogoCache.Values)) {
+        try { $image.Dispose() } catch {
+        }
+    }
+    $script:BadgeDualLogoCache = @{}
+}
+
+function Draw-TaskbarBadgeSegment {
+    param(
+        [System.Drawing.Bitmap]$Bitmap,
+        [object]$Segment,
+        [double]$OffsetX,
+        [int]$OffsetY,
+        [object]$Context,
+        [System.Drawing.Rectangle]$Clip
+    )
+
+    $logoRect = New-Object System.Drawing.Rectangle (ConvertTo-BadgePixels ($Segment.LogoX + $OffsetX)), ($Context.LogoTop + $OffsetY), $Context.LogoSize, $Context.LogoSize
+    [UtpPillForm]::DrawPicture($Bitmap, (Get-BadgeSegmentLogo -Source $Segment.Source -Size $Context.LogoSize), $logoRect, $Clip)
+    foreach ($part in @($Segment.Parts)) {
+        $rect = New-Object System.Drawing.Rectangle (ConvertTo-BadgePixels ($part.X + $OffsetX)), (1 + $OffsetY), (ConvertTo-BadgePixels $part.Width), $Context.TextHeight
+        $isLabel = $part.Kind -eq 'label'
+        $color = if ($isLabel -or $null -eq $part.Color) { $Context.LabelColor } else { $part.Color }
+        [UtpPillForm]::DrawText($Bitmap, [string]$part.Text, $Context.Font, $color, $Context.Surface, $rect, $isLabel, $Clip)
+    }
+}
+
+function Get-TaskbarBadgeSegmentClip {
+    param(
+        [object]$Context,
+        [double]$Left,
+        [double]$Right
+    )
+
+    # During a transition each side stays inside its own moving band, so text never overlaps.
+    $leftPixel = [Math]::Max(0, (ConvertTo-BadgePixels ($Left - 3)))
+    $rightPixel = [Math]::Min($Context.Clip.Right, (ConvertTo-BadgePixels ($Right + 3)))
+    return New-Object System.Drawing.Rectangle $leftPixel, $Context.Clip.Top, ([Math]::Max(0, $rightPixel - $leftPixel)), $Context.Clip.Height
+}
+
+function New-TaskbarBadgeSegmentBitmap {
+    param(
+        [object]$Data,
+        [int]$Width,
+        [int]$Height,
+        [object]$NextData = $null,
+        [double]$Ease = 1.0
+    )
+
+    $surface = Get-TaskbarBadgeColor
+    $bitmap = [UtpPillForm]::RenderSurface($Width, $Height, $surface, (Get-TaskbarBadgeBorderColor))
+    $font = New-BadgeFont -PointSize $script:BadgeLabelFontSize -Bold $true
+    try {
+        $textHeight = [Math]::Max(1, $bitmap.Height - 2)
+        $context = [pscustomobject]@{
+            Font = $font
+            Surface = $surface
+            LabelColor = $(if ($script:BadgeTheme -eq 'Dark') { [System.Drawing.Color]::FromArgb(224,226,233) } else { [System.Drawing.Color]::FromArgb(52,56,64) })
+            LogoSize = ConvertTo-BadgePixels 22
+            LogoTop = (Get-BadgeLogoViewportLocation -BadgeHeight $bitmap.Height).Y
+            TextHeight = $textHeight
+            Clip = New-Object System.Drawing.Rectangle 0, 1, $bitmap.Width, $textHeight
+        }
+        $dividerHeight = [Math]::Min($textHeight, (ConvertTo-BadgePixels 14))
+        $dividerWidth = [Math]::Max(1, (ConvertTo-BadgePixels 1))
+        $dividerTop = [int][Math]::Floor(($bitmap.Height - $dividerHeight) / 2.0)
+        $dividerColor = Get-TaskbarBadgeDividerColor
+        if ($null -eq $NextData) {
+            foreach ($segment in @($Data.Segments)) {
+                Draw-TaskbarBadgeSegment -Bitmap $bitmap -Segment $segment -OffsetX 0 -OffsetY 0 -Context $context -Clip $context.Clip
+            }
+            foreach ($divider in @($Data.Dividers)) {
+                [UtpPillForm]::DrawDivider($bitmap, (New-Object System.Drawing.Rectangle (ConvertTo-BadgePixels $divider), $dividerTop, $dividerWidth, $dividerHeight), $dividerColor)
+            }
+            return $bitmap
+        }
+
+        # The single pill's queued transition, per side: a switched provider slides down and out
+        # while its replacement enters from above; an unchanged provider glides to its new place.
+        $shift = [int][Math]::Round($textHeight * $Ease, 0)
+        $from = @($Data.Segments)
+        $to = @($NextData.Segments)
+        for ($slot = 0; $slot -lt $to.Count; $slot++) {
+            $new = $to[$slot]
+            $old = if ($slot -lt $from.Count) { $from[$slot] } else { $new }
+            $left = $old.Start + (($new.Start - $old.Start) * $Ease)
+            $right = $old.End + (($new.End - $old.End) * $Ease)
+            $clip = Get-TaskbarBadgeSegmentClip -Context $context -Left $left -Right $right
+            $enterOffset = ($old.Start - $new.Start) * (1.0 - $Ease)
+            if ($old.Source -eq $new.Source) {
+                Draw-TaskbarBadgeSegment -Bitmap $bitmap -Segment $new -OffsetX $enterOffset -OffsetY 0 -Context $context -Clip $clip
+            }
+            else {
+                Draw-TaskbarBadgeSegment -Bitmap $bitmap -Segment $old -OffsetX (($new.Start - $old.Start) * $Ease) -OffsetY $shift -Context $context -Clip $clip
+                Draw-TaskbarBadgeSegment -Bitmap $bitmap -Segment $new -OffsetX $enterOffset -OffsetY ($shift - $textHeight) -Context $context -Clip $clip
+            }
+        }
+        $fromDividers = @($Data.Dividers)
+        $toDividers = @($NextData.Dividers)
+        for ($index = 0; $index -lt $toDividers.Count; $index++) {
+            $start = if ($index -lt $fromDividers.Count) { $fromDividers[$index] } else { $toDividers[$index] }
+            $x = $start + (($toDividers[$index] - $start) * $Ease)
+            [UtpPillForm]::DrawDivider($bitmap, (New-Object System.Drawing.Rectangle (ConvertTo-BadgePixels $x), $dividerTop, $dividerWidth, $dividerHeight), $dividerColor)
+        }
+        return $bitmap
+    }
+    catch {
+        $bitmap.Dispose()
+        throw
+    }
+    finally {
+        $font.Dispose()
+    }
+}
+
+function New-TaskbarBadgePreviewBitmap {
+    $source = Get-TaskbarBadgeTargetSource
+    $data = Get-TaskbarBadgeData -Source $source
+    if ($source -ne "dual") {
+        $data = Get-TaskbarBadgeSingleLayout -Data $data
+    }
+    $height = if ($null -ne $script:BadgeForm -and -not $script:BadgeForm.IsDisposed) { $script:BadgeForm.Height } else { ConvertTo-BadgePixels 28 }
+    return (New-TaskbarBadgeSegmentBitmap -Data $data -Width (ConvertTo-BadgePixels ([int]$data.Width)) -Height $height)
+}
+
 function Get-TaskbarBadgeColor {
     if ($script:BadgeTheme -ne 'Dark') { return [System.Drawing.Color]::FromArgb(250,251,253) }
     return [System.Drawing.Color]::FromArgb(32, 33, 38)
@@ -1883,7 +2250,7 @@ function Get-TaskbarBadgeBounds {
     $bounds = $screen.Bounds
     $workArea = $screen.WorkingArea
     if ($Width -le 0) {
-        $source = $(if ([string]::IsNullOrWhiteSpace([string]$script:BadgeDisplayedSource)) { Get-TaskbarBadgeDefaultSource } else { $script:BadgeDisplayedSource })
+        $source = $(if ([string]::IsNullOrWhiteSpace([string]$script:BadgeDisplayedSource)) { Get-TaskbarBadgeTargetSource } else { $script:BadgeDisplayedSource })
         $Width = [int](Get-TaskbarBadgeData -Source $source).Width
     }
     $width = ConvertTo-BadgePixels $Width
@@ -2347,6 +2714,13 @@ function New-BadgeLogoImage {
 }
 
 function New-TaskbarBadgeBitmap {
+    if ($script:BadgeDisplayedSource -eq "dual" -and $null -ne $script:BadgeDualData) {
+        $frame = if ($script:BadgeAnimating) { $script:BadgeDualFrame } else { $null }
+        if ($null -ne $frame) {
+            return (New-TaskbarBadgeSegmentBitmap -Data $frame.From -NextData $frame.To -Ease $frame.Ease -Width $script:BadgeForm.Width -Height $script:BadgeForm.Height)
+        }
+        return (New-TaskbarBadgeSegmentBitmap -Data $script:BadgeDualData -Width $script:BadgeForm.Width -Height $script:BadgeForm.Height)
+    }
     $bitmap = [UtpPillForm]::RenderSurface($script:BadgeForm.Width, $script:BadgeForm.Height, (Get-TaskbarBadgeColor), (Get-TaskbarBadgeBorderColor))
     try {
         [UtpPillForm]::DrawViewport($bitmap, $script:BadgeTextViewport)
@@ -2489,7 +2863,10 @@ function Dispose-TaskbarBadge {
         $script:BadgeHovering = $false
         $script:BadgeAnimating = $false
         $script:BadgePendingSource = ""
+        $script:BadgeDualData = $null
+        $script:BadgeDualFrame = $null
     }
+    Clear-BadgeSegmentLogoCache
 }
 
 function New-BadgeRowLabel {
@@ -2753,6 +3130,18 @@ function Set-TaskbarBadgeContent {
     if ($null -eq $Data) {
         $Data = Get-TaskbarBadgeData -Source $Source
     }
+    if ($Data.Source -eq "dual") {
+        # Two providers are drawn as free segments on the same alpha surface; the
+        # single-provider label rows stay untouched until that layout returns.
+        Set-TaskbarBadgeLayout -Data $Data
+        $script:BadgeDualData = $Data
+        $script:BadgeDualFrame = $null
+        $script:BadgeDisplayedSource = "dual"
+        $script:BadgeRenderSignature = Get-TaskbarBadgeRenderSignature -Data $Data
+        Update-BadgeToolTip -Source "dual"
+        Present-TaskbarBadge
+        return
+    }
     Set-TaskbarBadgeLayout -Data $Data
     Set-BadgeRowContent -Row ([pscustomobject]@{
         Panel = $script:BadgeCurrentRow
@@ -2804,7 +3193,8 @@ function Update-BadgeToolTip {
     param([string]$Source)
     if ($null -ne $script:BadgeToolTip) { $script:BadgeToolTip.Dispose(); $script:BadgeToolTip=$null }
     if ($null -ne $script:BadgeForm -and -not $script:BadgeForm.IsDisposed) {
-        $script:BadgeForm.AccessibleName=Get-ProviderStatusMessage -Source $Source
+        $sources = if ($Source -eq 'dual') { @(Get-TaskbarBadgeDualSources) } else { @($Source) }
+        $script:BadgeForm.AccessibleName=(@($sources | ForEach-Object { Get-ProviderStatusMessage -Source $_ }) -join ' | ')
     }
 }
 
@@ -2821,6 +3211,10 @@ function Update-BadgeSlideAnimation {
         if ($null -ne $script:BadgeAnimationTimer) {
             $script:BadgeAnimationTimer.Stop()
         }
+        return
+    }
+    if ($script:BadgeAnimationTargetSource -eq "dual") {
+        Update-BadgeDualAnimation
         return
     }
 
@@ -2876,7 +3270,8 @@ function Start-BadgeSlideToSource {
         $Source = "codex"
     }
 
-    if ($script:BadgeDisplayedSource -eq $Source -and -not $script:BadgeAnimating) {
+    if (($script:BadgeDisplayedSource -eq $Source -or $script:BadgeDisplayedSource -eq "dual") -and -not $script:BadgeAnimating) {
+        # Leaving the two-provider layout has no previous label row to slide away.
         Set-TaskbarBadgeContent -Source $Source
         Set-BadgeTextYOffset -Offset 0
         return
@@ -2943,8 +3338,129 @@ function Invoke-TaskbarBadgeMouseUp {
         return
     }
     if ($EventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
+        if ((Get-TaskbarBadgeLayout) -eq "dual") {
+            Invoke-TaskbarBadgeDualClick -X $EventArgs.X
+            return
+        }
         Toggle-TaskbarBadgeDefaultSource
     }
+}
+
+function Start-BadgeDualTransition {
+    if ($script:BadgeAnimating) {
+        # Rapid clicks finish at the latest selection, like the single-provider pill.
+        $script:BadgePendingSource = "dual"
+        return
+    }
+    if ($null -eq $script:BadgeForm -or $script:BadgeForm.IsDisposed) { return }
+
+    $target = Get-TaskbarBadgeData -Source "dual"
+    $from = $script:BadgeDualData
+    if ($script:BadgeDisplayedSource -ne "dual" -or $null -eq $from -or -not [System.Windows.Forms.SystemInformation]::IsMenuAnimationEnabled) {
+        Set-TaskbarBadgeContent -Source "dual" -Data $target
+        return
+    }
+
+    if ($null -eq $script:BadgeAnimationTimer) {
+        $script:BadgeAnimationTimer = New-Object System.Windows.Forms.Timer
+        $script:BadgeAnimationTimer.Interval = 16
+        $script:BadgeAnimationTimer.Add_Tick({ Update-BadgeSlideAnimation })
+    }
+    $script:BadgeDualFrame = [pscustomobject]@{ From = $from; To = $target; Ease = 0.0 }
+    $script:BadgeAnimationTargetSource = "dual"
+    $script:BadgeAnimationStartWidth = [int][Math]::Round($script:BadgeForm.Width / $script:BadgeDpiScale, 0)
+    $script:BadgeAnimationTargetWidth = [int]$target.Width
+    $script:BadgeAnimationStartedAt = [Diagnostics.Stopwatch]::StartNew()
+    $script:BadgeAnimating = $true
+    $script:BadgeAnimationTimer.Start()
+}
+
+function Update-BadgeDualAnimation {
+    $frame = $script:BadgeDualFrame
+    if ($null -eq $frame) {
+        $script:BadgeAnimating = $false
+        if ($null -ne $script:BadgeAnimationTimer) { $script:BadgeAnimationTimer.Stop() }
+        return
+    }
+
+    $progress = [Math]::Min(1, [Math]::Max(0, $script:BadgeAnimationStartedAt.Elapsed.TotalMilliseconds / $script:BadgeAnimationDurationMs))
+    $frame.Ease = Get-BadgeTransitionEase -Progress $progress
+    $width = [int][Math]::Round($script:BadgeAnimationStartWidth + (($script:BadgeAnimationTargetWidth - $script:BadgeAnimationStartWidth) * $frame.Ease), 0)
+    Set-TaskbarBadgeWidth -Width $width
+    Present-TaskbarBadge
+
+    if ($progress -ge 1) {
+        $script:BadgeAnimating = $false
+        if ($null -ne $script:BadgeAnimationTimer) { $script:BadgeAnimationTimer.Stop() }
+        $script:BadgeDualFrame = $null
+        Set-TaskbarBadgeContent -Source "dual" -Data $frame.To
+        $pending = $script:BadgePendingSource
+        $script:BadgePendingSource = ""
+        if ($pending -eq "dual" -and (@(Get-TaskbarBadgeDualSources) -join '|') -ne (@($frame.To.Sources) -join '|')) {
+            Start-BadgeDualTransition
+        }
+    }
+}
+
+function Get-TaskbarBadgeDualSlotAt {
+    param([int]$X)
+
+    $data = if ($script:BadgeAnimating -and $null -ne $script:BadgeDualFrame) { $script:BadgeDualFrame.To } else { $script:BadgeDualData }
+    if ($null -eq $data -or @($data.Dividers).Count -eq 0) { return 0 }
+    if ($X -ge (ConvertTo-BadgePixels $data.Dividers[0])) { return 1 }
+    return 0
+}
+
+function Invoke-TaskbarBadgeDualClick {
+    param([int]$X)
+
+    # Each side switches independently and never shows the provider from the other side.
+    $slot = Get-TaskbarBadgeDualSlotAt -X $X
+    $sources = @(Get-TaskbarBadgeDualSources)
+    $sources[$slot] = Get-NextTaskbarBadgeDualSource -Slot $slot
+    $script:State.settings.taskbarBadgeDualSources = @($sources)
+    $script:PendingStateSave = $true
+    $script:BadgeHovering = $false
+    Start-BadgeDualTransition
+    Update-PillPreferencesPage
+}
+
+function Reset-TaskbarBadgeTransition {
+    if ($null -ne $script:BadgeAnimationTimer) { $script:BadgeAnimationTimer.Stop() }
+    $script:BadgeAnimating = $false
+    $script:BadgePendingSource = ""
+    $script:BadgeDualFrame = $null
+    $script:BadgeRenderSignature = ""
+    Set-BadgeTextYOffset -Offset 0
+}
+
+function Set-TaskbarBadgePreference {
+    param(
+        [string]$Layout = "",
+        [int]$Slot = -1,
+        [string]$Source = "",
+        [string]$Detail = "",
+        [switch]$Swap
+    )
+
+    $settings = $script:State.settings
+    if ($Layout -in @("single", "dual")) { $settings.taskbarBadgeLayout = $Layout }
+    if ($Swap -or $Slot -in @(0, 1)) {
+        $sources = @(Get-TaskbarBadgeDualSources)
+        if ($Swap) { $sources = @($sources[1], $sources[0]) }
+        if ($Slot -in @(0, 1) -and $Source -in @(Get-TaskbarBadgeSources)) {
+            # Picking the other side's provider swaps both sides instead of duplicating it.
+            if ($sources[1 - $Slot] -eq $Source) { $sources[1 - $Slot] = $sources[$Slot] }
+            $sources[$Slot] = $Source
+        }
+        $settings.taskbarBadgeDualSources = @($sources)
+    }
+    if ($Detail -in @("all", "tightest")) { $settings.taskbarBadgeDualDetail = $Detail }
+    Save-State
+    $script:PendingStateSave = $false
+    Reset-TaskbarBadgeTransition
+    Refresh-TaskbarBadge
+    Update-PillPreferencesPage
 }
 
 function Ensure-TaskbarBadge {
@@ -3084,6 +3600,7 @@ function Refresh-TaskbarBadge {
             $script:BadgeAnimationTimer.Stop()
             $script:BadgeAnimating = $false
             $script:BadgePendingSource = ''
+            $script:BadgeDualFrame = $null
         }
     }
     if (-not [bool]$script:State.settings.showTaskbarBadge) {
@@ -3113,14 +3630,14 @@ function Refresh-TaskbarBadge {
     }
 
     $targetSource = $(if ([string]::IsNullOrWhiteSpace([string]$script:BadgeDisplayedSource)) {
-        Get-TaskbarBadgeDefaultSource
+        Get-TaskbarBadgeTargetSource
     } else {
         $script:BadgeDisplayedSource
     })
     $targetData = $null
     $targetSignature = $script:BadgeRenderSignature
     if (-not $geometryOnlyMode) {
-        $targetSource = Get-TaskbarBadgeDefaultSource
+        $targetSource = Get-TaskbarBadgeTargetSource
         $targetData = Get-TaskbarBadgeData -Source $targetSource
         $targetSignature = Get-TaskbarBadgeRenderSignature -Data $targetData
         Update-BadgeToolTip -Source $targetSource
@@ -3885,6 +4402,7 @@ function Update-MainWindow {
         if($null -ne $script:MainWindowControls.FullscreenHide){$script:MainWindowControls.FullscreenHide.Checked=[bool]$script:State.settings.hideTaskbarBadgeInFullscreen}
         if($null -ne $script:MainWindowControls.ClaudeControl){$script:MainWindowControls.ClaudeControl.Checked=[bool]$script:State.settings.claudeControlEnabled}
         Update-CodexBucketChoices
+        Update-PillPreferencesPage
         $refreshing = $script:ProviderRefreshes.Count -gt 0
         $refreshLiveButton.Enabled = -not $refreshing
         $refreshLiveButton.Text = $(if ($refreshing) { "Refreshing..." } else { "Refresh now" })
@@ -4189,6 +4707,189 @@ function Update-UsageTabLayout {
     }
 }
 
+function Get-TaskbarPreviewStripColor {
+    # Approximates the Windows 11 taskbar behind the real pill.
+    if ($script:BadgeTheme -eq 'Dark') { return [System.Drawing.Color]::FromArgb(28,28,32) }
+    return [System.Drawing.Color]::FromArgb(236,238,242)
+}
+
+function New-PillPreferencesPage {
+    param([System.Windows.Forms.TabPage]$Page)
+
+    $muted = [System.Drawing.Color]::FromArgb(99,104,117)
+    $ink = [System.Drawing.Color]::FromArgb(36,38,44)
+
+    $heading = New-Object System.Windows.Forms.Label
+    $heading.Text = 'Taskbar pill'
+    $heading.Location = New-Object System.Drawing.Point 26,16
+    $heading.Size = New-Object System.Drawing.Size 400,28
+    $heading.Font = New-Object System.Drawing.Font 'Segoe UI Semibold',13
+    $heading.ForeColor = $ink
+    $Page.Controls.Add($heading)
+
+    $intro = New-Object System.Windows.Forms.Label
+    $intro.Text = 'Choose what the pill next to the clock shows. Changes apply right away.'
+    $intro.Location = New-Object System.Drawing.Point 28,46
+    $intro.Size = New-Object System.Drawing.Size 760,20
+    $intro.ForeColor = $muted
+    $Page.Controls.Add($intro)
+
+    $strip = New-Object System.Windows.Forms.Panel
+    $strip.Location = New-Object System.Drawing.Point 28,76
+    $strip.Size = New-Object System.Drawing.Size 760,64
+    $strip.BackColor = Get-TaskbarPreviewStripColor
+    Enable-ControlDoubleBuffering -Control $strip
+    $preview = New-Object System.Windows.Forms.PictureBox
+    $preview.Dock = 'Fill'
+    $preview.SizeMode = 'CenterImage'
+    $preview.BackColor = $strip.BackColor
+    $preview.AccessibleName = 'Pill preview'
+    $preview.Add_Disposed({ param($eventSource,$eventData) if($null -ne $eventSource.Image){ $eventSource.Image.Dispose() } })
+    $strip.Controls.Add($preview)
+    $Page.Controls.Add($strip)
+
+    $layoutLabel = New-Object System.Windows.Forms.Label
+    $layoutLabel.Text = 'Layout'
+    $layoutLabel.Location = New-Object System.Drawing.Point 28,156
+    $layoutLabel.AutoSize = $true
+    $layoutLabel.Font = New-Object System.Drawing.Font 'Segoe UI Semibold',9.5
+    $layoutLabel.ForeColor = $ink
+    $Page.Controls.Add($layoutLabel)
+
+    $singleRadio = New-Object System.Windows.Forms.RadioButton
+    $singleRadio.Text = 'One provider (click the pill to switch)'
+    $singleRadio.Location = New-Object System.Drawing.Point 28,180
+    $singleRadio.Size = New-Object System.Drawing.Size 330,26
+    $singleRadio.Add_Click({ Set-TaskbarBadgePreference -Layout single })
+    $Page.Controls.Add($singleRadio)
+
+    $dualRadio = New-Object System.Windows.Forms.RadioButton
+    $dualRadio.Text = 'Two providers side by side'
+    $dualRadio.Location = New-Object System.Drawing.Point 372,180
+    $dualRadio.Size = New-Object System.Drawing.Size 330,26
+    $dualRadio.Add_Click({ Set-TaskbarBadgePreference -Layout dual })
+    $Page.Controls.Add($dualRadio)
+
+    $leftLabel = New-Object System.Windows.Forms.Label
+    $leftLabel.Text = 'Left provider'
+    $leftLabel.Location = New-Object System.Drawing.Point 28,222
+    $leftLabel.AutoSize = $true
+    $Page.Controls.Add($leftLabel)
+    $leftBox = New-Object System.Windows.Forms.ComboBox
+    $leftBox.DropDownStyle = 'DropDownList'
+    $leftBox.DisplayMember = 'Label'
+    $leftBox.AccessibleName = 'Left provider in the pill'
+    $leftBox.Location = New-Object System.Drawing.Point 28,244
+    $leftBox.Size = New-Object System.Drawing.Size 230,25
+    $leftBox.Add_SelectionChangeCommitted({ param($eventSource,$eventData) if($null -ne $eventSource.SelectedItem){ Set-TaskbarBadgePreference -Slot 0 -Source $eventSource.SelectedItem.Id } })
+    $Page.Controls.Add($leftBox)
+
+    $swapButton = New-Object System.Windows.Forms.Button
+    $swapButton.Text = 'Swap'
+    $swapButton.AccessibleName = 'Swap left and right provider'
+    $swapButton.Location = New-Object System.Drawing.Point 266,242
+    $swapButton.Size = New-Object System.Drawing.Size 78,29
+    Set-MainWindowButtonStyle -Button $swapButton
+    $swapButton.Add_Click({ Set-TaskbarBadgePreference -Swap })
+    $Page.Controls.Add($swapButton)
+
+    $rightLabel = New-Object System.Windows.Forms.Label
+    $rightLabel.Text = 'Right provider'
+    $rightLabel.Location = New-Object System.Drawing.Point 352,222
+    $rightLabel.AutoSize = $true
+    $Page.Controls.Add($rightLabel)
+    $rightBox = New-Object System.Windows.Forms.ComboBox
+    $rightBox.DropDownStyle = 'DropDownList'
+    $rightBox.DisplayMember = 'Label'
+    $rightBox.AccessibleName = 'Right provider in the pill'
+    $rightBox.Location = New-Object System.Drawing.Point 352,244
+    $rightBox.Size = New-Object System.Drawing.Size 230,25
+    $rightBox.Add_SelectionChangeCommitted({ param($eventSource,$eventData) if($null -ne $eventSource.SelectedItem){ Set-TaskbarBadgePreference -Slot 1 -Source $eventSource.SelectedItem.Id } })
+    $Page.Controls.Add($rightBox)
+
+    $detailLabel = New-Object System.Windows.Forms.Label
+    $detailLabel.Text = 'Windows shown'
+    $detailLabel.Location = New-Object System.Drawing.Point 612,222
+    $detailLabel.AutoSize = $true
+    $Page.Controls.Add($detailLabel)
+    $detailBox = New-Object System.Windows.Forms.ComboBox
+    $detailBox.DropDownStyle = 'DropDownList'
+    $detailBox.AccessibleName = 'Allowance windows shown per provider'
+    $detailBox.Location = New-Object System.Drawing.Point 612,244
+    $detailBox.Size = New-Object System.Drawing.Size 176,25
+    [void]$detailBox.Items.Add('All windows')
+    [void]$detailBox.Items.Add('Tightest window only')
+    $detailBox.Add_SelectionChangeCommitted({ param($eventSource,$eventData) Set-TaskbarBadgePreference -Detail $(if($eventSource.SelectedIndex -eq 1){'tightest'}else{'all'}) })
+    $Page.Controls.Add($detailBox)
+
+    $hint = New-Object System.Windows.Forms.Label
+    $hint.Text = 'With two providers, click the left or right side of the pill to switch that side. Period labels shorten to 5h, wk and mo so both fit.'
+    $hint.Location = New-Object System.Drawing.Point 28,286
+    $hint.Size = New-Object System.Drawing.Size 760,38
+    $hint.ForeColor = $muted
+    $Page.Controls.Add($hint)
+
+    $controls = @{Page=$Page;Strip=$strip;Preview=$preview;Single=$singleRadio;Dual=$dualRadio;Left=$leftBox;Right=$rightBox;Swap=$swapButton;Detail=$detailBox;Hint=$hint;Intro=$intro}
+    $Page.Tag = $controls
+    $Page.Add_Resize({ param($eventSource,$eventData) Update-PillPreferencesLayout -Controls $eventSource.Tag })
+    Update-PillPreferencesLayout -Controls $controls
+    return $controls
+}
+
+function Update-PillPreferencesLayout {
+    param([hashtable]$Controls)
+    if ($null -eq $Controls -or $Controls.Page.IsDisposed) { return }
+    $width = [Math]::Max(560, $Controls.Page.ClientSize.Width - 56)
+    $Controls.Strip.Width = $width
+    $Controls.Hint.Width = $width
+    $Controls.Intro.Width = $width
+}
+
+function Update-PillPreferencesPage {
+    if ($null -eq $script:MainWindowControls -or $null -eq $script:MainWindowControls.Pill) { return }
+    $pill = $script:MainWindowControls.Pill
+    if ($null -eq $pill.Preview -or $pill.Preview.IsDisposed) { return }
+
+    $names = @{codex='ChatGPT / Codex';claude='Claude';antigravity='Antigravity';opencodego='OpenCode Go';qwen='Qwen Token Plan'}
+    $dual = (Get-TaskbarBadgeLayout) -eq 'dual'
+    if ($pill.Single.Checked -ne (-not $dual)) { $pill.Single.Checked = -not $dual }
+    if ($pill.Dual.Checked -ne $dual) { $pill.Dual.Checked = $dual }
+    $available = @(Get-TaskbarBadgeSources)
+    $signature = $available -join '|'
+    $sources = @(Get-TaskbarBadgeDualSources)
+    $boxes = @($pill.Left, $pill.Right)
+    for ($slot = 0; $slot -lt 2; $slot++) {
+        $box = $boxes[$slot]
+        if ([string]$box.Tag -ne $signature) {
+            $box.Items.Clear()
+            foreach ($source in $available) { [void]$box.Items.Add([pscustomobject]@{Id=$source;Label=$names[$source]}) }
+            $box.Tag = $signature
+        }
+        if (-not $box.DroppedDown) {
+            foreach ($entry in $box.Items) {
+                if ($entry.Id -eq $sources[$slot] -and $box.SelectedItem -ne $entry) { $box.SelectedItem = $entry }
+            }
+        }
+        $box.Enabled = $dual
+    }
+    $pill.Swap.Enabled = $dual
+    $pill.Detail.Enabled = $dual
+    $detailIndex = if ([string]$script:State.settings.taskbarBadgeDualDetail -eq 'tightest') { 1 } else { 0 }
+    if (-not $pill.Detail.DroppedDown -and $pill.Detail.SelectedIndex -ne $detailIndex) { $pill.Detail.SelectedIndex = $detailIndex }
+
+    $stripColor = Get-TaskbarPreviewStripColor
+    foreach ($control in @($pill.Strip, $pill.Preview)) { $control.BackColor = $stripColor }
+    $oldImage = $pill.Preview.Image
+    try { $pill.Preview.Image = New-TaskbarBadgePreviewBitmap } catch { $pill.Preview.Image = $null }
+    if ($null -ne $oldImage) { $oldImage.Dispose() }
+    $target = Get-TaskbarBadgeTargetSource
+    $summary = @(foreach ($source in $(if ($target -eq 'dual') { $sources } else { @($target) })) {
+        $items = @((Get-TaskbarBadgeData -Source $source).Items | Where-Object { $_.Label -ne 'cache' } | ForEach-Object { "$($_.Label) $($_.Text)" })
+        "$($names[$source]): $($items -join ', ')"
+    })
+    $pill.Preview.AccessibleName = 'Pill preview. ' + ($summary -join '. ')
+}
+
 function Show-MainWindow {
     if ($null -ne $script:MainForm -and -not $script:MainForm.IsDisposed) {
         $script:MainForm.WindowState = "Normal"
@@ -4416,6 +5117,13 @@ function Show-MainWindow {
     $detailsTab.Text = "Details"
     $detailsTab.BackColor = [System.Drawing.Color]::White
     $tabs.TabPages.Add($detailsTab)
+    $pillTab = New-Object System.Windows.Forms.TabPage
+    $pillTab.Text = "Pill"
+    $pillTab.BackColor = [System.Drawing.Color]::White
+    $pillTab.UseVisualStyleBackColor = $false
+    $pillTab.AutoScroll = $true
+    $tabs.TabPages.Add($pillTab)
+    $pillControls = New-PillPreferencesPage -Page $pillTab
     $preferencesTab = New-Object System.Windows.Forms.TabPage
     $preferencesTab.Text = "Preferences"
     $preferencesTab.BackColor = [System.Drawing.Color]::White
@@ -4622,7 +5330,7 @@ function Show-MainWindow {
     $form.Controls.Add($footer)
     $hideButton.Location = New-Object System.Drawing.Point 820,716
     $exitButton.Location = New-Object System.Drawing.Point 920,716
-    $script:MainWindowControls = @{FullscreenHide=$fullscreenCheck;ClaudeControl=$claudeControlCheck;QwenEnabled=$qwenEnabledCheck;CodexBucket=$codexBucketBox;Rows=$usageRows;Plan=$planBox;Resets=$resetsList;Limits=$limitsList;Live=$liveList;Header=$header;Status=$liveStatusLabel;Refresh=$refreshLiveButton}
+    $script:MainWindowControls = @{Pill=$pillControls;FullscreenHide=$fullscreenCheck;ClaudeControl=$claudeControlCheck;QwenEnabled=$qwenEnabledCheck;CodexBucket=$codexBucketBox;Rows=$usageRows;Plan=$planBox;Resets=$resetsList;Limits=$limitsList;Live=$liveList;Header=$header;Status=$liveStatusLabel;Refresh=$refreshLiveButton}
     $script:RefreshMainWindow = { Update-MainWindow }
 
 
@@ -4890,6 +5598,16 @@ function New-TrayMenu {
     })
     [void]$menu.Items.Add($badgeItem)
 
+    $dualItem = New-Object System.Windows.Forms.ToolStripMenuItem
+    $dualItem.Text = "Show two providers"
+    $dualItem.CheckOnClick = $true
+    $dualItem.Checked = (Get-TaskbarBadgeLayout) -eq "dual"
+    $dualItem.Add_Click({
+        param($eventSource, $eventData)
+        Set-TaskbarBadgePreference -Layout $(if ($eventSource.Checked) { "dual" } else { "single" })
+    })
+    [void]$menu.Items.Add($dualItem)
+
     $claudeKeeperItem = New-Object System.Windows.Forms.ToolStripMenuItem
     $claudeKeeperItem.Text = "Keep Claude active"
     $claudeKeeperItem.CheckOnClick = $true
@@ -4920,9 +5638,10 @@ function New-TrayMenu {
     $exitItem.Add_Click({ Exit-TrayApp })
     [void]$menu.Items.Add($exitItem)
 
-    $menu.Tag = @{Badge=$badgeItem;Keeper=$claudeKeeperItem;Status=$statusItem;Refresh=$refreshItem}
+    $menu.Tag = @{Badge=$badgeItem;Dual=$dualItem;Keeper=$claudeKeeperItem;Status=$statusItem;Refresh=$refreshItem}
     $menuOpeningAction = {
         param($eventSource, $eventData)
+        $eventSource.Tag.Dual.Checked = (Get-TaskbarBadgeLayout) -eq "dual"
         $badgeItem = $eventSource.Tag.Badge
         $claudeKeeperItem = $eventSource.Tag.Keeper
         $statusItem = $eventSource.Tag.Status

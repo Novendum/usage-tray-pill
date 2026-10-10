@@ -7,6 +7,7 @@ Your AI usage, one glance away.
 1. Extract the **whole ZIP** to a folder you want to keep.
 2. Review the scripts, then double-click **Start-UsageTrayPill.cmd**.
 3. Click the pill to switch providers. Right-click it to open the overview, settings or Exit.
+4. Optional: show two providers at once, such as ChatGPT and Claude, in the overview's **Pill** tab. Then click the left or right side of the pill to switch that side.
 
 Requires Windows 11 and Windows PowerShell 5.1. No administrator rights are needed. The pill follows the taskbar theme and hides during fullscreen by default.
 

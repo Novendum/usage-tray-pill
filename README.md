@@ -16,17 +16,20 @@ A small Windows utility for checking remaining **Codex, Claude, Antigravity, Ope
 
 **[Quick start](#quick-start)** · **[Provider setup](docs/PROVIDERS.md)** · **[What's changed](CHANGELOG.md)** · **[Report a bug](https://github.com/Novendum/usage-tray-pill/issues)**
 
-## What's new in rc.5
+## What's new in rc.6
 
-**One start file. A smaller download.** Application code, setup helpers and developer tests now have their own folders. The users' ZIP includes what you need to run UTP, with a short guide and safe migration of this installation's old shortcuts. Development tests and promotional media stay in the source repository. All rc.4 stability fixes are retained.
+**Two at a glance.** Show two providers side by side in one pill, such as ChatGPT and Claude. Pick the left and right provider in the new **Pill** tab, with a live preview, and click either side of the pill to switch just that side. Labels shorten to `5h`, `wk` and `mo` so both fit. The single-provider pill stays the default.
 
-[Download v0.1.0-rc.5](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.5) · [Read the changes](CHANGELOG.md#010-rc5---2026-10-07)
+![Two-provider pill in light and dark taskbars, showing illustrative ChatGPT and Claude allowances](docs/media/utp-two-providers.png)
+
+[Download v0.1.0-rc.6](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.6) · [Read the changes](CHANGELOG.md#010-rc6---2026-10-10)
 
 ## At home in your taskbar
 
 ![Actual UTP pills in light and dark themes, showing illustrative Codex and Claude allowances](docs/media/utp-pill-themes.png)
 
 - **A clear glance.** Bold text, smooth rounded edges and crisp icons. The pill follows your Windows taskbar's light or dark theme.
+- **Two at a glance.** Show two providers side by side, such as ChatGPT and Claude. Set it up in the **Pill** tab of the overview, or right-click > **Show two providers**.
 - **A quiet interaction.** Click to cycle providers, right-click for actions. No hover popup. Transitions respect Windows animation preferences.
 - **Predictable visibility.** The pill hides when a full-screen app covers the primary taskbar and returns when the taskbar is exposed. You can disable full-screen hiding in Preferences.
 - **Freshness you can understand.** Background collection, refresh controls and explicit unavailable states. Missing data appears as `--`.
