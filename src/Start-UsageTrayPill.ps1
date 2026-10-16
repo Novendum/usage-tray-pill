@@ -232,6 +232,9 @@ $script:BadgeDualValueGap = 5
 $script:BadgeDualItemGap = 12
 $script:BadgeDualDividerGap = 12
 $script:BadgeDualPadRight = 13
+$script:BadgeDualCountdownGap = 9
+$script:BadgeDualClockSize = 13
+$script:BadgeDualClockGap = 4
 $script:BadgeDualData = $null
 $script:BadgeDualFrame = $null
 $script:BadgeDualLogoCache = @{}
@@ -386,6 +389,7 @@ function New-DefaultState {
             taskbarBadgeLayout = "single"
             taskbarBadgeDualSources = @("codex", "claude")
             taskbarBadgeDualDetail = "all"
+            taskbarBadgeResetCountdown = $false
             codexLimitId = "codex"
             keepClaudeCodeAlive = $false
             claudeControlEnabled = $false
@@ -464,6 +468,7 @@ function Normalize-State {
     Ensure-Property -Target $State.settings -Name "taskbarBadgeLayout" -Value "single"
     Ensure-Property -Target $State.settings -Name "taskbarBadgeDualSources" -Value @("codex", "claude")
     Ensure-Property -Target $State.settings -Name "taskbarBadgeDualDetail" -Value "all"
+    Ensure-Property -Target $State.settings -Name "taskbarBadgeResetCountdown" -Value $false
     Ensure-Property -Target $State.settings -Name "hideTaskbarBadgeInFullscreen" -Value $true
     Ensure-Property -Target $State.settings -Name "codexLimitId" -Value "codex"
     Ensure-Property -Target $State.settings -Name "claudeControlEnabled" -Value $false
@@ -498,6 +503,7 @@ function Normalize-State {
     if ([string]$State.settings.taskbarBadgeDualDetail -notin @("all", "tightest")) {
         $State.settings.taskbarBadgeDualDetail = "all"
     }
+    $State.settings.taskbarBadgeResetCountdown = ($State.settings.taskbarBadgeResetCountdown -eq $true)
     if ($null -eq $State.settings.keepClaudeCodeAlive) {
         $State.settings.keepClaudeCodeAlive = $false
     }
@@ -1743,12 +1749,14 @@ function Get-TaskbarBadgeData {
             @{ Label = "weekly"; Key = "seven_day" }
         )) {
             $remaining = $null
+            $resetsAt = ""
             if ($null -ne $usage -and [bool]$usage.available) {
                 $match = @($usage.items) | Where-Object { $_.key -eq $definition.Key } | Select-Object -First 1 -Wait
-                if ($null -ne $match) { $remaining = $match.remainingPercent }
+                if ($null -ne $match) { $remaining = $match.remainingPercent; $resetsAt = [string]$match.resetsAt }
             }
             $items += [pscustomobject]@{
                 Label = $definition.Label
+                ResetsAt = $(if ($null -ne $remaining) { $resetsAt } else { "" })
                 Text = $(if ($null -ne $remaining) { (Format-RemainingPercent $remaining) } else { "--" })
                 Color = $(if ($null -ne $remaining -and -not [bool]$usage.stale) { Get-PercentColor -Percent $remaining } else { $neutralColor })
             }
@@ -1777,12 +1785,14 @@ function Get-TaskbarBadgeData {
             @{ Label = "monthly"; Key = "monthly" }
         )) {
             $remaining = $null
+            $resetsAt = ""
             if ($null -ne $usage -and [bool]$usage.available) {
                 $match = @($usage.items) | Where-Object { $_.key -eq $definition.Key } | Select-Object -First 1 -Wait
-                if ($null -ne $match) { $remaining = $match.remainingPercent }
+                if ($null -ne $match) { $remaining = $match.remainingPercent; $resetsAt = [string]$match.resetsAt }
             }
             $items += [pscustomobject]@{
                 Label = $definition.Label
+                ResetsAt = $(if ($null -ne $remaining) { $resetsAt } else { "" })
                 Text = $(if ($null -ne $remaining) { (Format-RemainingPercent $remaining) } else { "--" })
                 Color = $(if ($null -ne $remaining -and -not [bool]$usage.stale) { Get-PercentColor -Percent $remaining } else { $neutralColor })
             }
@@ -1810,7 +1820,8 @@ function Get-TaskbarBadgeData {
                 $remaining = $item.remainingPercent
                 $items += [pscustomobject]@{
                     Label = [string]$item.label
-                    Text = $(if ($null -ne $remaining) { (Format-RemainingPercent $remaining) } else { "--" })
+                    ResetsAt = $(if ($null -ne $remaining) { [string]$item.resetsAt } else { "" })
+                    Text =$(if ($null -ne $remaining) { (Format-RemainingPercent $remaining) } else { "--" })
                     Color = $(if ($null -ne $remaining -and -not [bool]$usage.stale) { Get-PercentColor -Percent $remaining } else { $neutralColor })
                 }
             }
@@ -1838,17 +1849,19 @@ function Get-TaskbarBadgeData {
         $usage = Get-ClaudeUsageSnapshot
         $items = @()
         foreach ($definition in @(
-            @{ Label = "5h"; Key = "five_hour"; Legacy = "fiveHourRemainingPercent" },
-            @{ Label = "weekly"; Key = "seven_day"; Legacy = "sevenDayRemainingPercent" }
+            @{ Label = "5h"; Key = "five_hour"; Legacy = "fiveHourRemainingPercent"; LegacyReset = "fiveHourResetsAt" },
+            @{ Label = "weekly"; Key = "seven_day"; Legacy = "sevenDayRemainingPercent"; LegacyReset = "sevenDayResetsAt" }
         )) {
             $remaining = $null
+            $resetsAt = ""
             if ($null -ne $usage) {
                 $match = @($usage.limits) | Where-Object { $_.key -eq $definition.Key -or $_.label -eq $definition.Label } | Select-Object -First 1 -Wait
-                if ($null -ne $match) { $remaining = $match.remainingPercent }
-                elseif (-not [string]::IsNullOrWhiteSpace($definition.Legacy)) { $remaining = $usage.($definition.Legacy) }
+                if ($null -ne $match) { $remaining = $match.remainingPercent; $resetsAt = [string]$match.resetsAt }
+                elseif (-not [string]::IsNullOrWhiteSpace($definition.Legacy)) { $remaining = $usage.($definition.Legacy); $resetsAt = [string]$usage.($definition.LegacyReset) }
             }
             $items += [pscustomobject]@{
                 Label = $definition.Label
+                ResetsAt = $(if ($null -ne $remaining) { $resetsAt } else { "" })
                 Text = $(if ($null -ne $remaining) { (Format-RemainingPercent $remaining) } else { "--" })
                 Color = $(if ($null -ne $remaining -and -not [bool]$usage.stale) { Get-PercentColor -Percent $remaining } else { $neutralColor })
             }
@@ -1891,7 +1904,12 @@ function Get-TaskbarBadgeData {
         }
     }
 
-    $codexItem = [pscustomobject]@{ Label = $windowLabel; Text = $codexSecondaryText; Color = $codexSecondaryColor }
+    $codexResetsAt = ""
+    if ($null -ne $bucket -and $codexSecondaryText -ne "--") {
+        $codexWindow = Get-LiveBucketWindow -Bucket $bucket -Minutes 10080
+        $codexResetsAt = if ($null -ne $codexWindow) { [string]$codexWindow.resetsAt } else { [string]$bucket.primaryResetsAt }
+    }
+    $codexItem = [pscustomobject]@{ Label = $windowLabel; Text = $codexSecondaryText; Color = $codexSecondaryColor; ResetsAt = $codexResetsAt }
     return [pscustomobject]@{
         Source = "codex"
         SourceText = ""
@@ -1977,10 +1995,33 @@ function Get-TaskbarBadgeSegment {
         }
         $windows = @(if ($null -ne $tightest) { $tightest } else { $windows[0] })
     }
+    $countdownEnabled = $null -ne $script:State -and [bool]$script:State.settings.taskbarBadgeResetCountdown
     $items = @(foreach ($item in (@($windows) + @($marks))) {
-        [pscustomobject]@{ Label = (Get-BadgeCompactLabel ([string]$item.Label)); Text = [string]$item.Text; Color = $item.Color }
+        # Only short windows count down; a cached or unknown value never gets a countdown.
+        $countdown = if ($countdownEnabled -and [string]$item.Label -match '5h$' -and [string]$item.Text -ne '--' -and -not [bool]$data.Cached) { Format-BadgeResetCountdown ([string]$item.ResetsAt) } else { '' }
+        [pscustomobject]@{ Label = (Get-BadgeCompactLabel ([string]$item.Label)); Text = [string]$item.Text; Color = $item.Color; Countdown = $countdown }
     })
     return [pscustomobject]@{ Source = $Source; Items = $items; Cached = [bool]$data.Cached }
+}
+
+function Format-BadgeResetCountdown {
+    param(
+        [string]$ResetsAt,
+        [DateTimeOffset]$Now = [DateTimeOffset]::Now
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ResetsAt)) { return '' }
+    $reset = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse($ResetsAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeLocal, [ref]$reset)) { return '' }
+    # Round up so the pill never shows 0m while time remains.
+    $minutes = [int][Math]::Ceiling(($reset - $Now).TotalMinutes)
+    if ($minutes -le 0) { return '' }
+    if ($minutes -lt 60) { return "${minutes}m" }
+    $hours = [int][Math]::Floor($minutes / 60)
+    $rest = $minutes % 60
+    if ($hours -ge 24) { return "$([int][Math]::Floor($hours / 24))d$($hours % 24)h" }
+    if ($rest -eq 0) { return "${hours}h" }
+    return ('{0}h{1:00}m' -f $hours, $rest)
 }
 
 function Get-TaskbarBadgeSegmentLayout {
@@ -2005,6 +2046,15 @@ function Get-TaskbarBadgeSegmentLayout {
             $valueWidth = [Math]::Max((Get-BadgeTextWidth -Text ([string]$item.Text)), (Get-BadgeTextWidth -Text '00%'))
             $parts += [pscustomobject]@{ Kind = 'value'; Text = [string]$item.Text; X = $x; Width = $valueWidth; Color = $item.Color }
             $x += $valueWidth
+        }
+        if (-not [string]::IsNullOrEmpty([string]$item.Countdown)) {
+            # Clock glyph plus time to reset; the slot reserves "0h00m" so the pill does not twitch every minute.
+            $x += $script:BadgeDualCountdownGap
+            $parts += [pscustomobject]@{ Kind = 'clock'; Text = ''; X = $x; Width = $script:BadgeDualClockSize; Color = $null }
+            $x += $script:BadgeDualClockSize + $script:BadgeDualClockGap
+            $countdownWidth = [Math]::Max((Get-BadgeTextWidth -Text ([string]$item.Countdown)), (Get-BadgeTextWidth -Text '0h00m'))
+            $parts += [pscustomobject]@{ Kind = 'countdown'; Text = [string]$item.Countdown; X = $x; Width = $countdownWidth; Color = $null }
+            $x += $countdownWidth
         }
     }
     return [pscustomobject]@{ Source = $Segment.Source; Start = $Origin; LogoX = $Origin; End = $x; Parts = $parts; Items = $items }
@@ -2069,6 +2119,47 @@ function Get-TaskbarBadgeDividerColor {
     return [System.Drawing.Color]::FromArgb(82,85,96)
 }
 
+function Get-TaskbarBadgeMutedColor {
+    # Secondary information: readable, but quieter than the allowance value it belongs to.
+    if ($script:BadgeTheme -ne 'Dark') { return [System.Drawing.Color]::FromArgb(96,102,116) }
+    return [System.Drawing.Color]::FromArgb(172,176,188)
+}
+
+function Draw-BadgeClockGlyph {
+    param(
+        [System.Drawing.Bitmap]$Bitmap,
+        [int]$Left,
+        [int]$CenterY,
+        [int]$Size,
+        [System.Drawing.Color]$Color,
+        [System.Drawing.Rectangle]$Clip
+    )
+
+    # A vector clock at final pixel size, drawn only over the opaque interior.
+    $graphics = [System.Drawing.Graphics]::FromImage($Bitmap)
+    $stroke = [float][Math]::Max(1.2, $Size * 0.13)
+    $pen = New-Object System.Drawing.Pen $Color, $stroke
+    try {
+        $graphics.SetClip($Clip)
+        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+        $diameter = [float]($Size - $stroke)
+        $x = [float]($Left + ($stroke / 2.0))
+        $y = [float]($CenterY - ($diameter / 2.0))
+        $graphics.DrawEllipse($pen, $x, $y, $diameter, $diameter)
+        $cx = [float]($x + ($diameter / 2.0))
+        $cy = [float]($y + ($diameter / 2.0))
+        $graphics.DrawLine($pen, $cx, $cy, $cx, [float]($cy - ($diameter * 0.30)))
+        $graphics.DrawLine($pen, $cx, $cy, [float]($cx + ($diameter * 0.24)), [float]($cy + ($diameter * 0.12)))
+    }
+    finally {
+        $pen.Dispose()
+        $graphics.Dispose()
+    }
+}
+
 function Get-BadgeSegmentLogo {
     param(
         [string]$Source,
@@ -2104,6 +2195,14 @@ function Draw-TaskbarBadgeSegment {
     [UtpPillForm]::DrawPicture($Bitmap, (Get-BadgeSegmentLogo -Source $Segment.Source -Size $Context.LogoSize), $logoRect, $Clip)
     foreach ($part in @($Segment.Parts)) {
         $rect = New-Object System.Drawing.Rectangle (ConvertTo-BadgePixels ($part.X + $OffsetX)), (1 + $OffsetY), (ConvertTo-BadgePixels $part.Width), $Context.TextHeight
+        if ($part.Kind -eq 'clock') {
+            Draw-BadgeClockGlyph -Bitmap $Bitmap -Left $rect.Left -CenterY ([int](1 + $OffsetY + ($Context.TextHeight / 2.0))) -Size $rect.Width -Color $Context.MutedColor -Clip $Clip
+            continue
+        }
+        if ($part.Kind -eq 'countdown') {
+            [UtpPillForm]::DrawText($Bitmap, [string]$part.Text, $Context.Font, $Context.MutedColor, $Context.Surface, $rect, $false, $Clip)
+            continue
+        }
         $isLabel = $part.Kind -eq 'label'
         $color = if ($isLabel -or $null -eq $part.Color) { $Context.LabelColor } else { $part.Color }
         [UtpPillForm]::DrawText($Bitmap, [string]$part.Text, $Context.Font, $color, $Context.Surface, $rect, $isLabel, $Clip)
@@ -2141,6 +2240,7 @@ function New-TaskbarBadgeSegmentBitmap {
             Font = $font
             Surface = $surface
             LabelColor = $(if ($script:BadgeTheme -eq 'Dark') { [System.Drawing.Color]::FromArgb(224,226,233) } else { [System.Drawing.Color]::FromArgb(52,56,64) })
+            MutedColor = Get-TaskbarBadgeMutedColor
             LogoSize = ConvertTo-BadgePixels 22
             LogoTop = (Get-BadgeLogoViewportLocation -BadgeHeight $bitmap.Height).Y
             TextHeight = $textHeight
@@ -3116,7 +3216,7 @@ function Get-TaskbarBadgeRenderSignature {
             try { $color = $item.Color.ToArgb() } catch {
             }
         }
-        $parts += "{0}={1}:{2}" -f [string]$item.Label, [string]$item.Text, $color
+        $parts += "{0}={1}:{2}:{3}" -f [string]$item.Label, [string]$item.Text, $color, [string]$item.Countdown
     }
     return ($parts -join "|")
 }
@@ -3440,6 +3540,7 @@ function Set-TaskbarBadgePreference {
         [int]$Slot = -1,
         [string]$Source = "",
         [string]$Detail = "",
+        [string]$Countdown = "",
         [switch]$Swap
     )
 
@@ -3456,6 +3557,7 @@ function Set-TaskbarBadgePreference {
         $settings.taskbarBadgeDualSources = @($sources)
     }
     if ($Detail -in @("all", "tightest")) { $settings.taskbarBadgeDualDetail = $Detail }
+    if ($Countdown -in @("on", "off")) { $settings.taskbarBadgeResetCountdown = ($Countdown -eq "on") }
     Save-State
     $script:PendingStateSave = $false
     Reset-TaskbarBadgeTransition
@@ -4822,14 +4924,22 @@ function New-PillPreferencesPage {
     $detailBox.Add_SelectionChangeCommitted({ param($eventSource,$eventData) Set-TaskbarBadgePreference -Detail $(if($eventSource.SelectedIndex -eq 1){'tightest'}else{'all'}) })
     $Page.Controls.Add($detailBox)
 
+    $countdownCheck = New-Object System.Windows.Forms.CheckBox
+    $countdownCheck.Text = 'Show time until the 5-hour limit resets'
+    $countdownCheck.AccessibleName = 'Show a countdown to the 5-hour reset in the pill'
+    $countdownCheck.Location = New-Object System.Drawing.Point 28,282
+    $countdownCheck.Size = New-Object System.Drawing.Size 420,24
+    $countdownCheck.Add_Click({ param($eventSource,$eventData) Set-TaskbarBadgePreference -Countdown $(if($eventSource.Checked){'on'}else{'off'}) })
+    $Page.Controls.Add($countdownCheck)
+
     $hint = New-Object System.Windows.Forms.Label
     $hint.Text = 'With two providers, click the left or right side of the pill to switch that side. Period labels shorten to 5h, wk and mo so both fit.'
-    $hint.Location = New-Object System.Drawing.Point 28,286
+    $hint.Location = New-Object System.Drawing.Point 28,316
     $hint.Size = New-Object System.Drawing.Size 760,38
     $hint.ForeColor = $muted
     $Page.Controls.Add($hint)
 
-    $controls = @{Page=$Page;Strip=$strip;Preview=$preview;Single=$singleRadio;Dual=$dualRadio;Left=$leftBox;Right=$rightBox;Swap=$swapButton;Detail=$detailBox;Hint=$hint;Intro=$intro}
+    $controls = @{Page=$Page;Strip=$strip;Preview=$preview;Single=$singleRadio;Dual=$dualRadio;Left=$leftBox;Right=$rightBox;Swap=$swapButton;Detail=$detailBox;Countdown=$countdownCheck;Hint=$hint;Intro=$intro}
     $Page.Tag = $controls
     $Page.Add_Resize({ param($eventSource,$eventData) Update-PillPreferencesLayout -Controls $eventSource.Tag })
     Update-PillPreferencesLayout -Controls $controls
@@ -4874,6 +4984,9 @@ function Update-PillPreferencesPage {
     }
     $pill.Swap.Enabled = $dual
     $pill.Detail.Enabled = $dual
+    $pill.Countdown.Enabled = $dual
+    $countdownOn = [bool]$script:State.settings.taskbarBadgeResetCountdown
+    if ($pill.Countdown.Checked -ne $countdownOn) { $pill.Countdown.Checked = $countdownOn }
     $detailIndex = if ([string]$script:State.settings.taskbarBadgeDualDetail -eq 'tightest') { 1 } else { 0 }
     if (-not $pill.Detail.DroppedDown -and $pill.Detail.SelectedIndex -ne $detailIndex) { $pill.Detail.SelectedIndex = $detailIndex }
 

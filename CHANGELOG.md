@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Optional reset countdown in the two-provider pill: a small clock and the time until the 5-hour limit resets, for example `5h 61% · 2h10m` or `40m`. Turn it on in the **Pill** tab. It rounds up, updates every minute, keeps the pill width stable and is never shown for cached or unknown values.
+
 ### Fixed
 
 - Keep the background collector running when reporting a provider failure or saving a source schedule fails. Previously such a secondary error could stop the worker and with it collection for every provider until UTP restarted it. Pauses and safety rules are unchanged.

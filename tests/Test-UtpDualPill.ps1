@@ -90,6 +90,36 @@ $unknown=Get-TaskbarBadgeData -Source dual
 Check ((@($unknown.Segments[1].Items | ForEach-Object Text) -join ',') -eq '--,--') 'Unknown values must never be invented'
 $script:TestClaude=[pscustomobject]@{lastCheckedAt=(Get-Date).ToString('o');lastSuccessAt=(Get-Date).ToString('o');lastError='';stale=$false;fiveHourRemainingPercent=80;sevenDayRemainingPercent=62;limits=@()}
 
+# Reset countdown: off by default, only on known 5-hour windows, rounded up, never for cached values.
+$now=[DateTimeOffset]::new(2026,10,16,14,0,0,[TimeSpan]::FromHours(2))
+Check ((Format-BadgeResetCountdown $now.AddMinutes(40).ToString('o') -Now $now) -eq '40m') 'Countdown must show minutes below one hour'
+Check ((Format-BadgeResetCountdown $now.AddMinutes(130).ToString('o') -Now $now) -eq '2h10m') 'Countdown must show hours and minutes'
+Check ((Format-BadgeResetCountdown $now.AddMinutes(180).ToString('o') -Now $now) -eq '3h') 'Whole hours must not show 00m'
+Check ((Format-BadgeResetCountdown $now.AddSeconds(30).ToString('o') -Now $now) -eq '1m') 'Remaining seconds must round up, never to 0m'
+Check ((Format-BadgeResetCountdown $now.AddMinutes(-1).ToString('o') -Now $now) -eq '') 'A passed reset must not count down'
+Check ((Format-BadgeResetCountdown '' -Now $now) -eq '' -and (Format-BadgeResetCountdown 'not a date' -Now $now) -eq '') 'Unknown resets must stay unknown'
+Check ($now.ToUniversalTime().AddMinutes(95).ToString('o') -match 'Z|\+00:00' -and (Format-BadgeResetCountdown $now.ToUniversalTime().AddMinutes(95).ToString('o') -Now $now) -eq '1h35m') 'UTC reset times must count down correctly'
+Check (-not [bool](New-DefaultState).settings.taskbarBadgeResetCountdown) 'The countdown must be off by default'
+$script:State=New-TestState
+$script:State.settings.taskbarBadgeLayout='dual'
+$script:TestClaude=[pscustomobject]@{lastCheckedAt=(Get-Date).ToString('o');lastSuccessAt=(Get-Date).ToString('o');lastError='';stale=$false;fiveHourRemainingPercent=80;fiveHourResetsAt=(Get-Date).AddMinutes(130).ToString('o');sevenDayRemainingPercent=62;sevenDayResetsAt=(Get-Date).AddDays(3).ToString('o');limits=@()}
+$plain=Get-TaskbarBadgeData -Source dual
+Check (@($plain.Segments[1].Parts | Where-Object Kind -eq 'countdown').Count -eq 0) 'Without the option the pill must not show a countdown'
+$script:State.settings.taskbarBadgeResetCountdown=$true
+$timed=Get-TaskbarBadgeData -Source dual
+$countdown=@($timed.Segments[1].Parts | Where-Object Kind -eq 'countdown')
+Check ($countdown.Count -eq 1 -and $countdown[0].Text -match '^2h(09|10)m$') 'The 5-hour window must count down to its reset'
+Check (@($timed.Segments[1].Parts | Where-Object Kind -eq 'clock').Count -eq 1) 'The countdown must carry a clock glyph'
+Check (@($timed.Segments[0].Parts | Where-Object Kind -eq 'countdown').Count -eq 0) 'Weekly windows must not count down'
+Check ($timed.Width -gt $plain.Width) 'The countdown needs room in the capsule'
+$script:TestClaude.fiveHourResetsAt=(Get-Date).AddMinutes(7).ToString('o')
+Check ((Get-TaskbarBadgeData -Source dual).Width -eq $timed.Width) 'Shorter countdowns must not resize the pill'
+Check ((Get-TaskbarBadgeRenderSignature -Data (Get-TaskbarBadgeData -Source dual)) -ne (Get-TaskbarBadgeRenderSignature -Data $timed)) 'A changing countdown must trigger a redraw'
+$script:TestClaude.stale=$true
+Check (@((Get-TaskbarBadgeData -Source dual).Segments[1].Parts | Where-Object Kind -eq 'countdown').Count -eq 0) 'Cached values must not count down'
+# The rendering checks below include the clock glyph and countdown text.
+$script:TestClaude=[pscustomobject]@{lastCheckedAt=(Get-Date).ToString('o');lastSuccessAt=(Get-Date).ToString('o');lastError='';stale=$false;fiveHourRemainingPercent=80;fiveHourResetsAt=(Get-Date).AddMinutes(130).ToString('o');sevenDayRemainingPercent=62;limits=@()}
+
 # Rendering: native text and divider stay inside the opaque interior at every DPI and theme.
 foreach($theme in @('Light','Dark')) {
     foreach($scale in @(1.0,1.25,1.5,1.75,2.0)) {

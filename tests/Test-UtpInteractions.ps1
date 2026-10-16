@@ -95,6 +95,11 @@ try {
     $pill.Detail.SelectedIndex=1
     $commit.Invoke($pill.Detail,@([EventArgs]::Empty)) | Out-Null
     Check ($script:State.settings.taskbarBadgeDualDetail -eq 'tightest') 'The windows choice must apply'
+    Check ($pill.Countdown.Enabled -and -not $pill.Countdown.Checked) 'The reset countdown must be available and off by default'
+    $click.Invoke($pill.Countdown,@([EventArgs]::Empty)) | Out-Null
+    Check ([bool]$script:State.settings.taskbarBadgeResetCountdown -and $pill.Countdown.Checked) 'The reset countdown option must apply'
+    $click.Invoke($pill.Countdown,@([EventArgs]::Empty)) | Out-Null
+    Check (-not [bool]$script:State.settings.taskbarBadgeResetCountdown) 'The reset countdown option must switch off again'
     $saved=Get-Content -LiteralPath $script:DataPath -Raw | ConvertFrom-Json
     Check ($saved.settings.taskbarBadgeLayout -eq 'dual' -and (@($saved.settings.taskbarBadgeDualSources) -join ',') -eq 'antigravity,codex') 'Pill choices must be saved with the other settings'
     Set-TaskbarBadgePreference -Slot 0 -Source codex
