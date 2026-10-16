@@ -18,13 +18,17 @@ A small Windows utility for checking remaining **Codex, Claude, Antigravity, Ope
 
 **[Quick start](#quick-start)** · **[Provider setup](docs/PROVIDERS.md)** · **[What's changed](CHANGELOG.md)** · **[Report a bug](https://github.com/Novendum/usage-tray-pill/issues)**
 
-## What's new in rc.6
+## What's new in rc.7
 
-**Two at a glance.** Show two providers side by side in one pill, such as ChatGPT and Claude. Pick the left and right provider in the new **Pill** tab, with a live preview, and click either side of the pill to switch just that side. Labels shorten to `5h`, `wk` and `mo` so both fit. The single-provider pill stays the default.
+**Know when it resets.** The two-provider pill can now show a small clock with the time until your 5-hour limit resets, such as `2h10m` or `40m`. Turn it on in the **Pill** tab. Background collection is also sturdier: a failing error report can no longer stop it.
+
+![Two-provider pill with a reset countdown in light and dark taskbars, showing illustrative values](docs/media/utp-reset-countdown.png)
+
+rc.6 added **two providers side by side**, such as ChatGPT and Claude, chosen in the **Pill** tab; click either side of the pill to switch just that side.
 
 ![Two-provider pill in light and dark taskbars, showing illustrative ChatGPT and Claude allowances](docs/media/utp-two-providers.png)
 
-[Download v0.1.0-rc.6](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.6) · [Read the changes](CHANGELOG.md#010-rc6---2026-10-10)
+[Download v0.1.0-rc.7](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.7) · [Read the changes](CHANGELOG.md#010-rc7---2026-10-16)
 
 ## At home in your taskbar
 

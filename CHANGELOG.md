@@ -4,7 +4,11 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
-## [Unreleased]
+## [0.1.0-rc.7] - 2026-10-16
+
+### Added
+
+- Optional reset countdown in the two-provider pill: a small clock and the time until the 5-hour limit resets, for example `5h 61% · 2h10m` or `40m`. Turn it on in the **Pill** tab. It rounds up, updates every minute, keeps the pill width stable and is never shown for cached or unknown values.
 
 ### Fixed
 
