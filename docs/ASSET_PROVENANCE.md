@@ -25,7 +25,6 @@ The app icon (2026-10-19, rc.8) is a teal rounded tile with a white U and three 
 
 - `app-icon.ico` SHA-256: `9bade5459cd434ebf510516ed78f52c9e89e5f15a789f8bd960edd3095d16246`
 - `app-icon.png` SHA-256: `b21fcb155eb1277f2be70917c85ece8e2157ca8944d31f4e4f8f5d4dd5777685`
-- `app-icon.svg` SHA-256: `64a00480d4862f9acb527d8903c090124178cb877ef3c14d0186955627b8c320`
 
 High-resolution `*-source.png` working files stay local and are ignored. They contain generative provenance metadata and are not needed to build or run UTP. The deterministic SVG sources and stripped runtime PNG and ICO exports are part of the release package.
 
