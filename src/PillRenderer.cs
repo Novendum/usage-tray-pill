@@ -188,3 +188,19 @@ public class UtpPillForm : Form
         }
     }
 }
+
+// Borderless flyout (quick view) with the classic drop shadow and flicker-free painting.
+public class UtpFlyoutForm : Form
+{
+    public UtpFlyoutForm()
+    {
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.Manual;
+        KeyPreview = true;
+    }
+    protected override CreateParams CreateParams {
+        get { var p = base.CreateParams; p.ClassStyle |= 0x00020000; p.ExStyle |= 0x00000080; return p; }
+    }
+}

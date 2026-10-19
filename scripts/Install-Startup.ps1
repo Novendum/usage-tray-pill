@@ -15,7 +15,7 @@ if (-not (Test-Path -LiteralPath $launcherPath)) {
 $startupFolder = [Environment]::GetFolderPath("Startup")
 $shortcutPath = Join-Path $startupFolder "Usage Tray Pill.lnk"
 $wscriptPath = $installation.Wscript
-$iconPath = Join-Path $installation.Assets "tray-icon-light.ico"
+$iconPath = Get-UtpShortcutIconPath -Installation $installation -Theme "Light"
 if (-not (Test-Path -LiteralPath $iconPath)) {
     throw "UTP icon not found: $iconPath"
 }

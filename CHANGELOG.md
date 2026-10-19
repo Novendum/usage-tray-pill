@@ -4,6 +4,27 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.8] - 2026-10-20
+
+### Added
+
+- **Quick view**: middle-click the pill, or choose **Quick view** in the tray menu, for a small panel with every provider's allowance windows, when each one resets and what needs your attention. It has **Refresh now** and **Open overview**; Esc or a click elsewhere closes it.
+- **Notifications**, off by default: a Windows notification when an allowance window drops below 5, 10, 20 or 25%, and optionally when a limit resets. Turn them on in **Preferences**. Each window warns once until it recovers, and a restart does not repeat old warnings.
+- **Check for updates** in **Preferences** and the tray menu. Only when you click it, UTP asks GitHub for a newer release of this project, checks the download against the release's SHA-256 checksum, keeps your current version as a backup, and restarts. Your settings stay. Copies that run from a Git checkout are never replaced.
+- **Weekly countdown**: an optional clock for weekly and monthly windows in the two-provider pill, in days, for example `3d` or `2d5h`. Turn it on in the **Pill** tab next to the 5-hour countdown.
+- **Clear sign-in and key status**: when a provider needs you (expired key, sign-in or setup), its logo in the pill gets a small red dot, and the quick view says what to do in a few words.
+
+### Changed
+
+- New app icon. UTP windows now show it instead of the PowerShell icon and get their own taskbar group.
+- The overview window and its dialogs follow the Windows app mode, including a dark title bar in dark mode.
+- OpenCode Go: when the `OPENCODE_GO_API_KEY` Windows variable is set, the setup dialog shows which key UTP uses and can switch to the key saved in UTP. Saving a new key switches to it. An expired key is reported as **API key expired**, with what to do.
+
+### Upgrade notes
+
+- Run `scripts\Install-StartMenuShortcut.ps1` once after installing this version. Windows then shows notifications and the taskbar group under the name Usage Tray Pill. Existing shortcuts keep working without it.
+- **Check for updates** contacts `api.github.com` and GitHub's release-download host, and only when you click it. UTP never checks in the background.
+
 ## [0.1.0-rc.7] - 2026-10-16
 
 ### Added

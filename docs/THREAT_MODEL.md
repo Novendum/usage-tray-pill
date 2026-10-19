@@ -8,6 +8,7 @@ This document describes the security boundaries of Usage Tray Pill (UTP). It is 
 - Cached usage percentages and reset timestamps.
 - Claude statusline and Desktop usage data.
 - The integrity of shortcuts, startup entries, the Claude statusline command, and UTP-owned helper processes.
+- The installed application folder, which the optional updater replaces.
 
 ## Trust boundaries
 
@@ -33,6 +34,14 @@ Antigravity uses a separately installed CLI's usage command. The JSON schema is 
 
 Claude statusline and Desktop cache remain its ordinary sources. The optional isolated CLI control diagnostic sends no user prompt, asks for usage metadata, and rejects unexpected model activity or unsupported auth context. After explicit sign-in, the 2.1.286 probe established account quota without model activity. The interface remains experimental, off by default, and explicitly selectable in Preferences. External commands have bounded output and a 30-second execution limit, with a separate version check; they must not silently fall back to model inference.
 
+### Release updates
+
+**Check for updates** is the only code path that downloads code, and it runs only on explicit user action. It reads the release list from `api.github.com/repos/Novendum/usage-tray-pill/releases` and offers the newest published, non-draft release whose `vX.Y.Z` or `vX.Y.Z-rc.N` tag is newer than the running version and which carries both `UsageTrayPill-<version>-windows.zip` and `SHA256SUMS.txt`. Downloads go through the API and follow exactly one HTTPS redirect, which must point to GitHub's release-download hosts. Responses are size-limited (release list 2 MB, checksum list 64 KB, ZIP 20 MB) and each request has a total deadline.
+
+The ZIP's SHA-256 must equal the checksum list and, when GitHub reports one, the asset digest; a disagreement between the two is an error. Extraction rejects absolute, drive-qualified and parent paths before writing, requires the runtime files, and requires the embedded `$script:AppVersion` to equal the release version. The new folder is staged beside the installation on the same volume. A separate helper waits until UTP and its collector have exited, renames the installation to a marked backup, moves the new folder in and starts it. When the swap fails, it puts the previous folder back and starts that. A Git checkout is never replaced.
+
+GitHub, the `Novendum` organization and its release process are trusted publishers. The checksum list is published in the same release as the ZIP, so it protects against corruption and tampering in transit, not against a compromised maintainer account.
+
 ### Collector and UI
 
 One hidden collector isolates provider work in separate persistent runspaces. Authentication and entitlement failures pause automatic retries. Other failures back off from 30 to 900 seconds or honor bounded provider retry guidance. The UI watches normalized cache changes, and a 45-second manual-refresh watchdog may stop only its owned collector. These controls keep provider failures off the UI thread; they do not guarantee immediate provider reporting.
@@ -52,6 +61,11 @@ One hidden collector isolates provider work in separate persistent runspaces. Au
 | Repeated unauthorized requests | Automatic pause on auth/setup/entitlement failures, bounded retry delays otherwise. |
 | Diagnostic starts inference | No user prompt, explicit usage-control request, unexpected model-activity rejection, and command timeout. |
 | CLI error mistaken for no usage | Strict response validation; unsupported or missing context remains unavailable. |
+| Tampered or corrupted update | SHA-256 match against the release checksum list and GitHub's asset digest before extraction. |
+| Update download sent elsewhere | Fixed API host, one HTTPS redirect limited to GitHub's release-download hosts, size limits and request deadlines. |
+| Archive paths escaping the staging folder | Absolute, drive and parent paths rejected before anything is written; a second check keeps every file inside the staging folder. |
+| Downgrade or mismatched package | Strict version parsing and comparison; the package must report the release's version. |
+| Failed update leaves UTP unusable | Staging on the same volume, swap after UTP exits, marked backup, rollback and restart of the previous version. |
 
 ## Accepted limitations
 
@@ -60,6 +74,7 @@ One hidden collector isolates provider work in separate persistent runspaces. Au
 - Runtime-loaded provider icons and provider names remain subject to provider trademark policies.
 - CLI execution and sign-in behavior depend on the installed provider version. Offline fixtures do not establish account compatibility or absence of future provider-side behavior changes.
 - Provider accounting delays remain possible even when the collector and file-change notifications are healthy.
+- Release ZIPs are not code-signed. A compromised maintainer account or release could publish a matching checksum.
 
 ## Review requirements
 

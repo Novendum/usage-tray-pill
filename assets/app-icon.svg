@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Usage Tray Pill app icon</title>
+  <desc id="desc">The UTP mark: a white U with three descending amber usage bars on a teal gradient tile.</desc>
+  <defs>
+    <linearGradient id="tile" x1="40" y1="10" x2="216" y2="246" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3AD6E2"/>
+      <stop offset="1" stop-color="#09689C"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="10" x2="0" y2="110" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="bars" x1="0" y1="76" x2="0" y2="142" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFD666"/>
+      <stop offset="1" stop-color="#F79612"/>
+    </linearGradient>
+    <clipPath id="tileClip">
+      <rect x="10" y="10" width="236" height="236" rx="58"/>
+    </clipPath>
+  </defs>
+  <rect x="10" y="10" width="236" height="236" rx="58" fill="url(#tile)"/>
+  <rect x="0" y="0" width="256" height="110" fill="url(#glow)" clip-path="url(#tileClip)"/>
+  <rect x="10" y="10" width="236" height="236" rx="58" fill="none" stroke="#043C5C" stroke-opacity="0.35" stroke-width="2.5"/>
+  <path d="M62 66V128a66 66 0 0 0 132 0V66" fill="none" stroke="#032D46" stroke-opacity="0.24" stroke-width="36" stroke-linecap="round" transform="translate(0 7)"/>
+  <path d="M62 66V128a66 66 0 0 0 132 0V66" fill="none" stroke="#FFFFFF" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M101 82V134M128 100V134M155 118V134" fill="none" stroke="url(#bars)" stroke-width="18" stroke-linecap="round"/>
+</svg>

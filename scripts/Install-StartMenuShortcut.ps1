@@ -14,7 +14,7 @@ if (-not (Test-Path -LiteralPath $launcherPath)) {
     throw "Hidden launcher not found: $launcherPath"
 }
 
-$iconPath = Join-Path $installation.Assets ("tray-icon-" + $Theme.ToLowerInvariant() + ".ico")
+$iconPath = Get-UtpShortcutIconPath -Installation $installation -Theme $Theme
 if (-not (Test-Path -LiteralPath $iconPath)) {
     throw "Theme icon not found: $iconPath"
 }
@@ -40,6 +40,7 @@ $shortcut.WindowStyle = 7
 $shortcut.Description = "Start Usage Tray Pill hidden"
 $shortcut.IconLocation = "$iconPath,0"
 $shortcut.Save()
+[void](Set-UtpShortcutAppId -ShortcutPath $shortcutPath -Installation $installation)
 
 Write-Host "Start menu shortcut installed:"
 Write-Host $shortcutPath

@@ -24,13 +24,14 @@ $expectedFiles = @(
     'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md', 'docs/PROVIDERS.md', 'docs/ASSET_PROVENANCE.md',
     'THIRD_PARTY_LICENSES/QWEN_CODE_APACHE-2.0.txt',
     'assets/qwen-logo.png', 'assets/utp-logo.svg',
+    'assets/app-icon.ico', 'assets/app-icon.png', 'assets/app-icon.svg',
     'assets/tray-icon-dark.ico', 'assets/tray-icon-dark.png', 'assets/tray-icon-dark.svg',
     'assets/tray-icon-light.ico', 'assets/tray-icon-light.png', 'assets/tray-icon-light.svg',
     'src/BadgeVisibility.cs', 'src/CollectorPolicy.ps1', 'src/ExternalUsageAdapters.ps1',
     'src/Launch-UsageTrayPill.vbs', 'src/OpenCodeGo.ps1', 'src/OwnedUsageProcess.cs',
     'src/PillRenderer.cs', 'src/QwenTokenPlan.ps1', 'src/RequestDeadline.cs',
     'src/Start-ClaudeUsageKeeper.ps1', 'src/Start-UsageCollector.ps1', 'src/Start-UsageTrayPill.ps1',
-    'src/Update-ClaudeUsageFromStatusline.ps1', 'src/UsageFileMonitor.cs',
+    'src/Update-ClaudeUsageFromStatusline.ps1', 'src/UsageFileMonitor.cs', 'src/UtpShellIdentity.cs', 'src/UtpUpdate.ps1', 'src/Apply-UtpUpdate.ps1',
     'scripts/Install-ClaudeStatusLine.ps1', 'scripts/Install-DesktopShortcut.ps1',
     'scripts/Install-StartMenuShortcut.ps1', 'scripts/Install-Startup.ps1',
     'scripts/Uninstall-ClaudeStatusLine.ps1', 'scripts/Uninstall-DesktopShortcut.ps1',
@@ -75,7 +76,7 @@ if ($vbs -notmatch 'scriptDirectory & "\\Start-UsageTrayPill.ps1"') { throw 'VBS
 . (Join-Path $extractRoot 'scripts\UtpInstallationHelpers.ps1')
 $installation = Get-UtpInstallationPaths
 if ($installation.Root -ne $extractRoot) { throw 'Setup helper resolved the wrong package root.' }
-foreach ($path in @($installation.Launcher, $installation.Updater, (Join-Path $installation.Assets 'tray-icon-light.ico'), (Join-Path $installation.Assets 'tray-icon-dark.ico'))) {
+foreach ($path in @($installation.Launcher, $installation.Updater, (Join-Path $installation.Assets 'app-icon.ico'), (Join-Path $installation.Root 'src\UtpShellIdentity.cs'), (Join-Path $installation.Assets 'tray-icon-light.ico'), (Join-Path $installation.Assets 'tray-icon-dark.ico'))) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'A setup helper dependency is missing from the extracted package.' }
 }
 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $extractRoot 'scripts') -File | Where-Object { $_.Name -match '^(Install|Uninstall)-' }) {
@@ -93,6 +94,13 @@ foreach ($unsafeDirectory in @($repoRoot, (Join-Path $repoRoot 'src\package-test
     catch { $refusedSource = $_.Exception.Message -like 'OutputDirectory must not*' }
     if (-not $refusedSource) { throw 'Builder accepted a source directory as output.' }
 }
+
+# A release-shaped version must match the runtime version, or the in-app updater would refuse it.
+$mismatchDirectory = Join-Path $OutputDirectory 'version-mismatch'
+$refusedVersion = $false
+try { & $builder -Version '9.9.9' -OutputDirectory $mismatchDirectory | Out-Null }
+catch { $refusedVersion = $_.Exception.Message -like 'Version 9.9.9 does not match*' }
+if (-not $refusedVersion -or (Test-Path -LiteralPath $mismatchDirectory)) { throw 'Builder packaged a release version that differs from the runtime version.' }
 
 # PowerShell location can differ from the process working directory after Push-Location.
 Push-Location -LiteralPath $OutputDirectory
