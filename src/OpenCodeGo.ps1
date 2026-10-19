@@ -145,7 +145,7 @@ function ConvertFrom-OpenCodeGoStoredCredential {
 
 function Get-OpenCodeGoCredentials {
     $environmentApiKey = [string]$env:OPENCODE_GO_API_KEY
-    if (-not [string]::IsNullOrWhiteSpace($environmentApiKey)) {
+    if (Test-UtpOpenCodeEnvironmentKeyActive) {
         return [pscustomobject]@{
             apiKey = ConvertTo-OpenCodeGoApiKey $environmentApiKey
             source = "environment"
@@ -213,12 +213,32 @@ function ConvertTo-OpenCodeGoRetryAfterSeconds {
     return [int][Math]::Ceiling([Math]::Min(86400, [Math]::Max(0, $seconds)))
 }
 
+function Read-OpenCodeGoErrorDetail {
+    param([System.Net.WebResponse]$Response)
+    # Only used to classify the rejection; the provider's text is never shown or stored.
+    try {
+        $stream = $Response.GetResponseStream()
+        if ($null -eq $stream) { return '' }
+        $text = Read-OpenCodeGoLimitedUtf8Stream -Stream $stream -MaximumBytes 65536
+        $parsed = $text | ConvertFrom-Json -ErrorAction Stop
+        return [string]$parsed.error.message
+    }
+    catch { return '' }
+}
+
 function New-OpenCodeGoHttpException {
-    param([int]$StatusCode, [string]$RetryAfter = '')
+    param([int]$StatusCode, [string]$RetryAfter = '', [string]$Detail = '')
     $code = 'server_error'
     $message = 'OpenCode Go returned an unexpected response.'
     switch ($StatusCode) {
-        401 { $code = 'auth_expired'; $message = 'The OpenCode Go API key was rejected. Update it in Set up OpenCode Go.' }
+        401 {
+            $code = 'auth_expired'
+            $message = if ($Detail -match '(?i)expired') {
+                'This OpenCode API key has expired. Create a new key in the OpenCode console and save it in UTP.'
+            } else {
+                'OpenCode did not accept this API key. Copy a current key from the OpenCode console and save it in UTP.'
+            }
+        }
         403 { $code = 'subscription_required'; $message = 'This API key does not have an OpenCode Go subscription.' }
         429 { $code = 'rate_limited'; $message = 'OpenCode Go asks you to try again later.' }
     }
@@ -293,7 +313,10 @@ function Invoke-OpenCodeGoUsageRequest {
     catch [System.Net.WebException] {
         $webResponse = $_.Exception.Response
         if ($null -ne $webResponse) {
-            try { $errorToThrow = New-OpenCodeGoHttpException -StatusCode ([int]$webResponse.StatusCode) -RetryAfter $webResponse.Headers['Retry-After'] }
+            try {
+                $detail = if ([int]$webResponse.StatusCode -eq 401) { Read-OpenCodeGoErrorDetail -Response $webResponse } else { '' }
+                $errorToThrow = New-OpenCodeGoHttpException -StatusCode ([int]$webResponse.StatusCode) -RetryAfter $webResponse.Headers['Retry-After'] -Detail $detail
+            }
             finally { $webResponse.Dispose() }
             throw $errorToThrow
         }
@@ -447,7 +470,7 @@ function Get-OpenCodeGoStatusText {
     switch ([string]$usage.lastError) {
         "setup_required" { return "set up" }
         "api_key_required" { return "API key required" }
-        "auth_expired" { return "update API key" }
+        "auth_expired" { if ([string]$usage.lastErrorMessage -match '(?i)expired') { return "API key expired" } return "update API key" }
         "subscription_required" { return "Go subscription required" }
         "rate_limited" { return "try again later" }
         default { return "error" }
@@ -479,43 +502,70 @@ function Show-OpenCodeGoSetupDialog {
     }
 
     $form = New-Object System.Windows.Forms.Form
+    if (Get-Command Initialize-UtpForm -ErrorAction SilentlyContinue) { Initialize-UtpForm -Form $form }
     $form.Text = "Set up OpenCode Go"
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
-    $form.ClientSize = New-Object System.Drawing.Size 570, 240
+    $form.ClientSize = New-Object System.Drawing.Size 570, 330
+    $hasSavedKey = Test-Path -LiteralPath $script:OpenCodeGoCredentialPath
+    $environmentKeySet = -not [string]::IsNullOrWhiteSpace([string]$env:OPENCODE_GO_API_KEY)
+    $snapshot = $null
+    try { $snapshot = Read-OpenCodeGoUsageSnapshotRaw } catch {
+    }
 
     $intro = New-Object System.Windows.Forms.Label
     $intro.Location = New-Object System.Drawing.Point 18, 16
-    $intro.Size = New-Object System.Drawing.Size 530, 54
+    $intro.Size = New-Object System.Drawing.Size 530, 50
     $intro.Text = "Reads Go limits from the OpenCode usage API. Your key is encrypted for your Windows account. It can also authorize model use, so keep it private."
     $form.Controls.Add($intro)
 
+    # The actual reason a key stopped working, in UTP's own words (never the raw server text).
+    $problem = New-Object System.Windows.Forms.Label
+    $problem.Location = New-Object System.Drawing.Point 18, 68
+    $problem.Size = New-Object System.Drawing.Size 530, 38
+    $problem.ForeColor = [System.Drawing.Color]::FromArgb(196, 45, 57)
+    $problem.Text = if ($null -ne $snapshot -and [string]$snapshot.lastError -in @('auth_expired','api_key_required','subscription_required','credential_unreadable') -and -not [string]::IsNullOrWhiteSpace([string]$snapshot.lastErrorMessage)) {
+        "Current problem: " + [string]$snapshot.lastErrorMessage
+    } else { "" }
+    $form.Controls.Add($problem)
+
     $authLabel = New-Object System.Windows.Forms.Label
-    $authLabel.Location = New-Object System.Drawing.Point 18, 78
+    $authLabel.Location = New-Object System.Drawing.Point 18, 110
     $authLabel.Size = New-Object System.Drawing.Size 250, 20
     $authLabel.Text = "OpenCode Go API key"
     $form.Controls.Add($authLabel)
 
     $authBox = New-Object System.Windows.Forms.TextBox
-    $authBox.Location = New-Object System.Drawing.Point 18, 100
+    $authBox.Location = New-Object System.Drawing.Point 18, 132
     $authBox.Size = New-Object System.Drawing.Size 530, 24
     $authBox.UseSystemPasswordChar = $true
     $form.Controls.Add($authBox)
 
+    $useSavedCheck = New-Object System.Windows.Forms.CheckBox
+    $useSavedCheck.Location = New-Object System.Drawing.Point 18, 168
+    $useSavedCheck.Size = New-Object System.Drawing.Size 530, 24
+    $useSavedCheck.Text = "Use the key saved here instead of the OPENCODE_GO_API_KEY Windows variable"
+    $useSavedCheck.Checked = [string]$script:State.settings.openCodeGoKeySource -eq 'saved'
+    $useSavedCheck.Visible = $environmentKeySet
+    $form.Controls.Add($useSavedCheck)
+
     $hint = New-Object System.Windows.Forms.Label
-    $hint.Location = New-Object System.Drawing.Point 18, 134
-    $hint.Size = New-Object System.Drawing.Size 530, 34
-    $hint.Text = if ($null -ne $existing) {
-        "Leave blank to keep your key. OPENCODE_GO_API_KEY takes precedence over a saved key."
-    } else {
-        "Copy your Go API key from the OpenCode console. Your previous session stays saved until you replace it."
+    $hint.Location = New-Object System.Drawing.Point 18, 198
+    $hint.Size = New-Object System.Drawing.Size 530, 56
+    $hint.ForeColor = [System.Drawing.Color]::FromArgb(82, 87, 97)
+    $hintParts = @()
+    if ($environmentKeySet) {
+        $active = if ($useSavedCheck.Checked) { "the key saved here" } else { "the Windows variable" }
+        $hintParts += "OPENCODE_GO_API_KEY is set in Windows. UTP currently uses $active. Saving a new key here switches to that key."
     }
+    $hintParts += if ($hasSavedKey) { "Leave the box blank to keep your saved key." } else { "Copy your API key from the OpenCode console." }
+    $hint.Text = $hintParts -join " "
     $form.Controls.Add($hint)
 
     $dashboardButton = New-Object System.Windows.Forms.Button
-    $dashboardButton.Location = New-Object System.Drawing.Point 18, 192
+    $dashboardButton.Location = New-Object System.Drawing.Point 18, 280
     $dashboardButton.Size = New-Object System.Drawing.Size 125, 30
     $dashboardButton.Text = "Open console"
     $dashboardButton.Add_Click({
@@ -524,7 +574,7 @@ function Show-OpenCodeGoSetupDialog {
     $form.Controls.Add($dashboardButton)
 
     $removeButton = New-Object System.Windows.Forms.Button
-    $removeButton.Location = New-Object System.Drawing.Point 153, 192
+    $removeButton.Location = New-Object System.Drawing.Point 153, 280
     $removeButton.Size = New-Object System.Drawing.Size 120, 30
     $removeButton.Text = "Disable"
     $removeButton.Enabled = ($null -ne $existing -or [bool]$script:State.settings.openCodeGoEnabled)
@@ -541,25 +591,33 @@ function Show-OpenCodeGoSetupDialog {
     $form.Controls.Add($removeButton)
 
     $cancelButton = New-Object System.Windows.Forms.Button
-    $cancelButton.Location = New-Object System.Drawing.Point 374, 192
+    $cancelButton.Location = New-Object System.Drawing.Point 374, 280
     $cancelButton.Size = New-Object System.Drawing.Size 80, 30
     $cancelButton.Text = "Cancel"
     $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($cancelButton)
 
     $saveButton = New-Object System.Windows.Forms.Button
-    $saveButton.Location = New-Object System.Drawing.Point 464, 192
+    $saveButton.Location = New-Object System.Drawing.Point 464, 280
     $saveButton.Size = New-Object System.Drawing.Size 84, 30
     $saveButton.Text = "Save"
     $saveButton.Add_Click({
         try {
             $apiKey = $authBox.Text
             if ([string]::IsNullOrWhiteSpace($apiKey)) {
-                if ($null -eq $existing) {
+                if ($useSavedCheck.Checked -and -not $hasSavedKey) {
+                    throw (New-OpenCodeGoException -Code "api_key_required" -Message "Enter your OpenCode API key to use a saved key.")
+                }
+                if ($null -eq $existing -and -not $hasSavedKey -and -not $environmentKeySet) {
                     throw (New-OpenCodeGoException -Code "api_key_required" -Message "Enter your OpenCode Go API key.")
                 }
             } else {
                 Save-OpenCodeGoCredentials -ApiKey $apiKey
+                # A key typed here is the user's intent, even when the Windows variable still exists.
+                if ($environmentKeySet) { $useSavedCheck.Checked = $true }
+            }
+            if ($environmentKeySet) {
+                $script:State.settings.openCodeGoKeySource = if ($useSavedCheck.Checked) { 'saved' } else { 'auto' }
             }
             $script:State.settings.openCodeGoEnabled = $true
             Save-State

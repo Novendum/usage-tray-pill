@@ -10,11 +10,15 @@ Normalized Codex usage is stored separately in `codex-usage.json`. Refresh worke
 
 Per-provider collector schedule files store retry deadlines and pause state. OpenCode Go and Qwen caches and schedules also store a one-way revision hash of the active credential configuration to prevent reuse of another connection's quotas. These records contain no plaintext key or cookie.
 
-When OpenCode Go is explicitly configured, version 2 of `opencode-go-credentials.json` contains the user-supplied API key encrypted with Windows DPAPI for the current Windows user. UTP does not write the plaintext key to disk. `OPENCODE_GO_API_KEY` can supply the key instead and takes precedence. Legacy version-1 cookie records are left intact without decryption or use until the user explicitly saves a replacement.
+When OpenCode Go is explicitly configured, version 2 of `opencode-go-credentials.json` contains the user-supplied API key encrypted with Windows DPAPI for the current Windows user. UTP does not write the plaintext key to disk. `OPENCODE_GO_API_KEY` can supply the key instead and takes precedence, unless you choose the key saved in UTP in the OpenCode Go setup dialog. Legacy version-1 cookie records are left intact without decryption or use until the user explicitly saves a replacement.
 
 When Qwen Token Plan is explicitly configured, `qwen-token-plan-credentials.json` contains the user-supplied QwenCloud Cookie request-header value encrypted with Windows DPAPI for the current Windows user. The plaintext header is not written to disk by UTP.
 
 Disabling OpenCode Go or Qwen preserves its credential and cache. Disabled Qwen collection sends no quota requests.
+
+When notifications are on, `notifications-state.json` keeps, for each provider window, the last remaining percentage, its reset time and whether a warning was shown, so a restart does not repeat warnings. Windows shows the notification text (provider, window and percentage) and keeps it in its notification center according to your Windows settings.
+
+An update started with **Check for updates** keeps the previous application folder next to the installation as `<folder>.previous-<version>`. UTP keeps one such backup and removes older backups it made itself; folders you made are left alone. The temporary `.utp-update-*` folder is removed after the update, and `update.log` in the data folder records when you updated and between which versions.
 
 Do not include this directory in bug reports. Manual notes may contain information you entered yourself.
 
@@ -40,6 +44,7 @@ UTP does not discover credentials in Claude, OpenCode, Qwen, or browser-owned st
 - Antigravity usage is requested through its separately installed CLI, which may communicate with its provider under the user's sign-in. UTP has no direct Antigravity cloud, OAuth, or loopback fallback.
 - When explicitly enabled, OpenCode Go usage is requested directly from `https://opencode.ai/zen/go/v1/usage` with the supplied Bearer API key. This is a usage query, not a model request. No UTP-operated proxy is involved.
 - When explicitly enabled, Qwen Token Plan usage is requested from `https://home.qwencloud.com/tool/user/info.json` and `https://cs-data.qwencloud.com/data/api.json` with the user-supplied dashboard session. No UTP-operated proxy is involved.
+- Only when you click **Check for updates**, UTP reads the release list of `Novendum/usage-tray-pill` from `https://api.github.com`. If you then choose **Update now**, it downloads that release's `SHA256SUMS.txt` and ZIP through the same API. GitHub answers each download with one redirect to its release-download host (`release-assets.githubusercontent.com`, `objects.githubusercontent.com` or `github-releases.githubusercontent.com`), and UTP refuses any other destination. These requests carry no usage data, settings or credentials. Like any download, GitHub sees your IP address and the `UsageTrayPill-Updater` user agent.
 - UTP does not send usage data or credentials to a UTP-operated server.
 
 Claude normally uses statusline data or its Desktop cache. The optional, explicitly selected isolated CLI usage source asks for control metadata without a user prompt or model request; unavailable account context remains unavailable.

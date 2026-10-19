@@ -34,13 +34,14 @@ $packageFiles = @(
     'docs/PROVIDERS.md', 'docs/ASSET_PROVENANCE.md',
     'THIRD_PARTY_LICENSES/QWEN_CODE_APACHE-2.0.txt',
     'assets/qwen-logo.png', 'assets/utp-logo.svg',
+    'assets/app-icon.ico', 'assets/app-icon.png', 'assets/app-icon.svg',
     'assets/tray-icon-dark.ico', 'assets/tray-icon-dark.png', 'assets/tray-icon-dark.svg',
     'assets/tray-icon-light.ico', 'assets/tray-icon-light.png', 'assets/tray-icon-light.svg',
     'src/BadgeVisibility.cs', 'src/CollectorPolicy.ps1', 'src/ExternalUsageAdapters.ps1',
     'src/Launch-UsageTrayPill.vbs', 'src/OpenCodeGo.ps1', 'src/OwnedUsageProcess.cs',
     'src/PillRenderer.cs', 'src/QwenTokenPlan.ps1', 'src/RequestDeadline.cs',
     'src/Start-ClaudeUsageKeeper.ps1', 'src/Start-UsageCollector.ps1', 'src/Start-UsageTrayPill.ps1',
-    'src/Update-ClaudeUsageFromStatusline.ps1', 'src/UsageFileMonitor.cs',
+    'src/Update-ClaudeUsageFromStatusline.ps1', 'src/UsageFileMonitor.cs', 'src/UtpShellIdentity.cs', 'src/UtpUpdate.ps1', 'src/Apply-UtpUpdate.ps1',
     'scripts/Install-ClaudeStatusLine.ps1', 'scripts/Install-DesktopShortcut.ps1',
     'scripts/Install-StartMenuShortcut.ps1', 'scripts/Install-Startup.ps1',
     'scripts/Uninstall-ClaudeStatusLine.ps1', 'scripts/Uninstall-DesktopShortcut.ps1',
@@ -54,6 +55,15 @@ foreach ($entry in $entries) {
     $source = Join-Path $repoRoot $entry.Source
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Required package file missing: $($entry.Source)" }
     if ((Get-Item -LiteralPath $source).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Package files must not be links: $($entry.Source)" }
+}
+
+# A release version must be the version the package reports: the in-app updater refuses a
+# ZIP whose runtime names another version. Test builds (other version shapes) are exempt.
+if ($Version -match '^\d+\.\d+\.\d+(?:-rc\.\d+)?$') {
+    $runtime = [IO.File]::ReadAllText((Join-Path $repoRoot 'src\Start-UsageTrayPill.ps1'))
+    if ($runtime -notmatch ('(?m)^\$script:AppVersion = "' + [regex]::Escape($Version) + '"')) { throw "Version $Version does not match `$script:AppVersion in src/Start-UsageTrayPill.ps1." }
+    $changelog = [IO.File]::ReadAllText((Join-Path $repoRoot 'CHANGELOG.md'))
+    if ($changelog -notmatch ('(?m)^## \[' + [regex]::Escape($Version) + '\]')) { throw "Version $Version has no CHANGELOG.md section." }
 }
 
 $archiveName = "UsageTrayPill-$Version-windows.zip"

@@ -18,17 +18,17 @@ A small Windows utility for checking remaining **Codex, Claude, Antigravity, Ope
 
 **[Quick start](#quick-start)** · **[Provider setup](docs/PROVIDERS.md)** · **[What's changed](CHANGELOG.md)** · **[Report a bug](https://github.com/Novendum/usage-tray-pill/issues)**
 
-## What's new in rc.7
+## What's new in rc.8
 
-**Know when it resets.** The two-provider pill can now show a small clock with the time until your 5-hour limit resets, such as `2h10m` or `40m`. Turn it on in the **Pill** tab. Background collection is also sturdier: a failing error report can no longer stop it.
+**Everything at a glance, and a heads-up when it matters.** Middle-click the pill for the new **quick view**: every limit, when it resets, and which provider needs you. Turn on notifications for a low allowance or a reset, and update UTP from inside the app with **Check for updates**. UTP also gets a new icon, an overview that follows Windows dark mode, and a red dot on any provider that needs a new key or sign-in.
+
+![Quick view in light and dark, showing illustrative ChatGPT, Claude and OpenCode Go values](docs/media/utp-quick-view.png)
+
+Earlier: rc.7 added a **reset countdown** to the two-provider pill, and rc.6 added **two providers side by side**.
 
 ![Two-provider pill with a reset countdown in light and dark taskbars, showing illustrative values](docs/media/utp-reset-countdown.png)
 
-rc.6 added **two providers side by side**, such as ChatGPT and Claude, chosen in the **Pill** tab; click either side of the pill to switch just that side.
-
-![Two-provider pill in light and dark taskbars, showing illustrative ChatGPT and Claude allowances](docs/media/utp-two-providers.png)
-
-[Download v0.1.0-rc.7](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.7) · [Read the changes](CHANGELOG.md#010-rc7---2026-10-16)
+[Download v0.1.0-rc.8](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.8) · [Read the changes](CHANGELOG.md#010-rc8---2026-10-20)
 
 ## At home in your taskbar
 
@@ -36,17 +36,21 @@ rc.6 added **two providers side by side**, such as ChatGPT and Claude, chosen in
 
 - **A clear glance.** Bold text, smooth rounded edges and crisp icons. The pill follows your Windows taskbar's light or dark theme.
 - **Two at a glance.** Show two providers side by side, such as ChatGPT and Claude. Set it up in the **Pill** tab of the overview, or right-click > **Show two providers**.
-- **A quiet interaction.** Click to cycle providers, right-click for actions. No hover popup. Transitions respect Windows animation preferences.
+- **A quiet interaction.** Click to cycle providers, middle-click for the quick view, right-click for actions. No hover popup. Transitions respect Windows animation preferences.
+- **A heads-up when it matters.** Optional notifications when an allowance runs low or a limit resets, and a red dot when a provider needs a new key or sign-in.
 - **Predictable visibility.** The pill hides when a full-screen app covers the primary taskbar and returns when the taskbar is exposed. You can disable full-screen hiding in Preferences.
 - **Freshness you can understand.** Background collection, refresh controls and explicit unavailable states. Missing data appears as `--`.
 - **Your choice of sources.** Select the Codex allowance bucket and enable optional integrations in Preferences. Disable OpenCode Go or Qwen without losing the saved connection.
-- **Local by design.** Settings and caches stay on your PC. No UTP account or telemetry service. Provider requests use the connections described in [Privacy](PRIVACY.md).
+- **Local by design.** Settings and caches stay on your PC. No UTP account or telemetry service. Provider requests use the connections described in [Privacy](PRIVACY.md); UTP contacts GitHub only when you click **Check for updates**.
 
 ## A closer look
 
-![UTP usage overview with illustrative remaining allowances and Qwen paused](docs/media/utp-overview.png)
+<p align="center">
+  <img src="docs/media/utp-overview.png" width="49%" alt="UTP usage overview in light mode with illustrative remaining allowances and Qwen paused">
+  <img src="docs/media/utp-overview-dark.png" width="49%" alt="The same overview in Windows dark mode">
+</p>
 
-The overview brings available allowance windows together, with separate Details and Preferences tabs. These images use **fictitious values** rendered by the actual app; setup-required and paused providers are shown deliberately. The cover is generated product artwork with illustrative values, not a pixel-exact screenshot.
+The overview brings available allowance windows together, with separate Details, Pill and Preferences tabs, and follows the Windows light or dark app mode. These images use **fictitious values** rendered by the actual app; setup-required and paused providers are shown deliberately. The cover is generated product artwork with illustrative values, not a pixel-exact screenshot.
 
 ## Quick start
 
@@ -54,7 +58,7 @@ You need **Windows 11**, **Windows PowerShell 5.1**, and a supported, signed-in 
 
 1. [Download the source ZIP](https://github.com/Novendum/usage-tray-pill/archive/refs/heads/main.zip) and extract the **whole folder**, or clone this repository.
 2. Review the scripts, then double-click **`Start-UsageTrayPill.cmd`**.
-3. Right-click the pill to open its menu. Open the overview and Preferences to choose your sources.
+3. Right-click the pill to open its menu, or middle-click it for the quick view. Open the overview and Preferences to choose your sources.
 
 No administrator rights are required. Keep `src/`, `scripts/` and `assets/` beside the start file. The users' ZIP includes the app and optional setup helpers; development tests and promotional media stay in the source repository. See the [user guide](docs/USER_GUIDE.md) for upgrading from the older flat folder.
 
@@ -100,7 +104,7 @@ This does not change the permanent user or machine policy.
 <details>
 <summary><strong>Updating and uninstalling</strong></summary>
 
-Exit UTP before replacing its application files. For the new folder layout, back up the old application folder and extract into an empty folder at the same path. Do not overlay the new ZIP on old files. Re-run the optional installers you used to migrate their old root-level paths safely. See the [upgrade instructions](docs/USER_GUIDE.md#upgrade-from-the-old-flat-folder).
+From rc.8 on, choose **Check for updates** in the tray menu or Preferences: UTP downloads the new release from GitHub, verifies its checksum, keeps your current version as a backup and restarts. To update an older version by hand, exit UTP before replacing its application files. For the new folder layout, back up the old application folder and extract into an empty folder at the same path. Do not overlay the new ZIP on old files. Re-run the optional installers you used to migrate their old root-level paths safely. See the [upgrade instructions](docs/USER_GUIDE.md#upgrade-from-the-old-flat-folder).
 
 OpenCode Go users migrating from the dashboard adapter must supply a Go API key through setup. Old encrypted cookie records are preserved but no longer used.
 
@@ -144,7 +148,7 @@ Bug reports, provider compatibility notes and focused pull requests are welcome.
 .\tests\Test-UsageTrayPill.ps1
 ```
 
-Run tests in **Windows PowerShell 5.1**. Tests cover provider parsing, refresh lifecycle, interaction, DPI rendering and credential boundaries using isolated fixtures; passing offline tests does not prove every account or plan works.
+Run tests in **Windows PowerShell 5.1**. Tests cover provider parsing, refresh lifecycle, interaction, DPI rendering, notifications, updates and credential boundaries using isolated fixtures; passing offline tests does not prove every account or plan works.
 
 [Contributing](CONTRIBUTING.md) · [Architecture](docs/ARCHITECTURE.md) · [Support](SUPPORT.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md)
 

@@ -15,7 +15,7 @@ if (-not (Test-Path -LiteralPath $launcherPath)) {
 }
 
 $assetsPath = $installation.Assets
-$iconPath = Join-Path $assetsPath ("tray-icon-" + $Theme.ToLowerInvariant() + ".ico")
+$iconPath = Get-UtpShortcutIconPath -Installation $installation -Theme $Theme
 if (-not (Test-Path -LiteralPath $iconPath)) {
     throw "Theme icon not found: $iconPath"
 }

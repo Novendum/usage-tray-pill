@@ -44,7 +44,7 @@ https://opencode.ai/zen/go/v1/usage
 
 The API supplies 5-hour, weekly, and monthly percentages, statuses, and reset times. UTP normally refreshes every 60 seconds. Temporary errors may retain a clearly cached result for at most six hours. Rejected keys and missing subscriptions pause automatic requests and clear displayed values. The previous version-1 cookie file is preserved without decrypting or using it and requires a new API key; **Disable** preserves saved credentials and cache.
 
-For managed setups, `OPENCODE_GO_API_KEY` takes precedence over UTP's saved key. Legacy workspace/cookie environment variables are no longer used.
+For managed setups, `OPENCODE_GO_API_KEY` takes precedence over UTP's saved key. If that variable holds an old key, open **Set up OpenCode Go**: it shows which key UTP uses and can switch to the key saved in UTP, and saving a new key there switches to it. An expired key shows as **API key expired**; create a new key in the OpenCode console and save it in UTP. Legacy workspace/cookie environment variables are no longer used.
 
 Changing the saved key or active environment key invalidates quotas from the previous connection. Pauses and retry deadlines survive collector restarts; use an explicit refresh after resolving a paused source's setup or authentication issue.
 

@@ -656,6 +656,7 @@ function Show-QwenSetupDialog {
     }
 
     $form = New-Object System.Windows.Forms.Form
+    if (Get-Command Initialize-UtpForm -ErrorAction SilentlyContinue) { Initialize-UtpForm -Form $form }
     $form.Text = "Set up Qwen Token Plan"
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"

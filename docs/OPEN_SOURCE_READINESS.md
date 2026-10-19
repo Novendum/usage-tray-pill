@@ -1,5 +1,20 @@
 # Release readiness
 
+## v0.1.0-rc.8 — quick view, notifications, updates and dark mode
+
+Prepared on 2026-10-19 from rc.7.
+
+### Verified locally
+
+- The complete Windows PowerShell 5.1 suite. New regression tests cover the updater (version selection, fixed destinations, checksum and digest checks, unsafe archive paths, swap, rollback, and an end-to-end restart with a disposable launcher). They also cover notification decisions, the quick view, the dark/light theme round trip, the app icon and the Start-menu app ID.
+- The overview, its Pill and Preferences tabs and the quick view were checked on screen in the light and dark app modes at 100% scaling.
+
+### Remaining validation limits
+
+- **Check for updates** can be tried against a real published release once rc.9 exists. Until then, the download path is covered by offline fixtures and the swap by a disposable installation.
+- Notifications carry UTP's name and icon only when the Start-menu shortcut has UTP's app ID. Otherwise Windows may show them under Windows PowerShell.
+- Dark mode was checked on one machine at 100% scaling; other scaling levels and high-contrast themes still need a check.
+
 ## v0.1.0-rc.5 — organized source and lean user package
 
 Prepared on 2026-10-07 from rc.4. Runtime files live in `src/`, development checks in `tests/` and installation/removal helpers in `scripts/`. The root CMD remains the entry point. Existing same-root shortcuts and Claude statusline commands migrate safely; unrelated integrations remain protected.

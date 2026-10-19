@@ -36,3 +36,25 @@ function Test-UtpManagedClaudeCommand {
 
     return ($Command -in $Installation.ManagedCommands)
 }
+
+function Get-UtpShortcutIconPath {
+    param($Installation, [string]$Theme = "Light")
+
+    # The app icon works on light and dark backgrounds; the themed icons remain a fallback.
+    $appIcon = Join-Path $Installation.Assets "app-icon.ico"
+    if (Test-Path -LiteralPath $appIcon) { return $appIcon }
+    return (Join-Path $Installation.Assets ("tray-icon-" + $Theme.ToLowerInvariant() + ".ico"))
+}
+
+function Set-UtpShortcutAppId {
+    param([string]$ShortcutPath, $Installation)
+
+    # Lets Windows show "Usage Tray Pill" with its icon in the taskbar and in notifications.
+    $identitySource = Join-Path $Installation.Root "src\UtpShellIdentity.cs"
+    if (-not (Test-Path -LiteralPath $identitySource)) { return $false }
+    try {
+        if (-not ('UtpShellIdentity' -as [type])) { Add-Type -Path $identitySource }
+        return [UtpShellIdentity]::SetShortcutAppId($ShortcutPath, [UtpShellIdentity]::AppId)
+    }
+    catch { return $false }
+}

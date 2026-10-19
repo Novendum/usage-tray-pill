@@ -6,8 +6,8 @@ Your AI usage, one glance away.
 
 1. Extract the **whole ZIP** to a folder you want to keep.
 2. Review the scripts, then double-click **Start-UsageTrayPill.cmd**.
-3. Click the pill to switch providers. Right-click it to open the overview, settings or Exit.
-4. Optional: show two providers at once, such as ChatGPT and Claude, in the overview's **Pill** tab. Then click the left or right side of the pill to switch that side. Turn on **Show time until the 5-hour limit resets** to see a small clock with the remaining time, such as `2h10m`.
+3. Click the pill to switch providers. Middle-click it for the **quick view**: every limit, when it resets and what needs your attention. Right-click it to open the overview, settings or Exit.
+4. Optional: show two providers at once, such as ChatGPT and Claude, in the overview's **Pill** tab. Then click the left or right side of the pill to switch that side. Turn on **Show time until the 5-hour limit resets** to see a small clock with the remaining time, such as `2h10m`, and **Also for weekly and monthly limits** to count those down in days, such as `3d`.
 
 Requires Windows 11 and Windows PowerShell 5.1. No administrator rights are needed. The pill follows the taskbar theme and hides during fullscreen by default.
 
@@ -17,7 +17,13 @@ Keep `src/`, `assets/` and `scripts/` beside the start file. You do not need to 
 
 Use only the services you already have. Sign in with each provider's supported CLI or configure its optional connection in UTP. OpenCode Go, Qwen and the experimental Claude CLI source are off by default.
 
-See [provider setup](PROVIDERS.md). Missing values appear as `--`; cached values are marked. Resolve sign-in or setup errors before using **Refresh now**.
+See [provider setup](PROVIDERS.md). Missing values appear as `--`; cached values are marked. A small red dot on a provider's logo means it needs you: sign in again, add a new key or finish setup. The quick view says which. Resolve those before using **Refresh now**.
+
+## Notifications and updates
+
+In **Preferences**, turn on **Notify when an allowance drops below** and choose 5, 10, 20 or 25% to get a Windows notification when a window falls under it. **Send test notification** shows what it looks like. Turn on **Notify when a limit resets** to hear when it is available again. Both are off by default.
+
+**Check for updates** in Preferences or the tray menu asks GitHub for a newer release, and only when you click it. **Update now** downloads the release and checks its SHA-256 checksum. It then keeps your current version next to it as a backup (`...previous-<version>`) and restarts UTP. Your settings stay. To go back, exit UTP, rename the current folder, and give the backup the original folder name.
 
 ## Optional installation
 
@@ -28,6 +34,8 @@ Open Windows PowerShell in this folder and run only the options you want:
 .\scripts\Install-StartMenuShortcut.ps1
 .\scripts\Install-Startup.ps1
 ```
+
+The Start-menu shortcut also lets Windows show notifications and the taskbar group under the name Usage Tray Pill.
 
 Claude's optional statusline integration has its own installer:
 

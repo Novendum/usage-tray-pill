@@ -139,12 +139,14 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RequestDeadline.cs')
 if (-not ($RefreshLiveOnce -or $RefreshAntigravityOnce -or $RefreshOpenCodeGoOnce -or $RefreshQwenOnce)) {
     Add-Type -Path (Join-Path $PSScriptRoot 'PillRenderer.cs') -ReferencedAssemblies System.Windows.Forms,System.Drawing
+    Add-Type -Path (Join-Path $PSScriptRoot 'UtpShellIdentity.cs')
     Add-Type -Path (Join-Path $PSScriptRoot 'BadgeVisibility.cs') -ReferencedAssemblies System.Drawing
 }
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:AppName = "Usage Tray Pill"
+$script:AppVersion = "0.1.0-rc.8"
 $script:DataDir = Join-Path $env:APPDATA "UsageTrayPill"
 $script:DataPath = Join-Path $script:DataDir "data.json"
 $script:CodexUsagePath = Join-Path $script:DataDir "codex-usage.json"
@@ -390,6 +392,11 @@ function New-DefaultState {
             taskbarBadgeDualSources = @("codex", "claude")
             taskbarBadgeDualDetail = "all"
             taskbarBadgeResetCountdown = $false
+            taskbarBadgeResetCountdownWeekly = $false
+            openCodeGoKeySource = "auto"
+            notifyLowAllowance = $false
+            notifyLowThreshold = 10
+            notifyReset = $false
             codexLimitId = "codex"
             keepClaudeCodeAlive = $false
             claudeControlEnabled = $false
@@ -469,6 +476,11 @@ function Normalize-State {
     Ensure-Property -Target $State.settings -Name "taskbarBadgeDualSources" -Value @("codex", "claude")
     Ensure-Property -Target $State.settings -Name "taskbarBadgeDualDetail" -Value "all"
     Ensure-Property -Target $State.settings -Name "taskbarBadgeResetCountdown" -Value $false
+    Ensure-Property -Target $State.settings -Name "taskbarBadgeResetCountdownWeekly" -Value $false
+    Ensure-Property -Target $State.settings -Name "openCodeGoKeySource" -Value "auto"
+    Ensure-Property -Target $State.settings -Name "notifyLowAllowance" -Value $false
+    Ensure-Property -Target $State.settings -Name "notifyLowThreshold" -Value 10
+    Ensure-Property -Target $State.settings -Name "notifyReset" -Value $false
     Ensure-Property -Target $State.settings -Name "hideTaskbarBadgeInFullscreen" -Value $true
     Ensure-Property -Target $State.settings -Name "codexLimitId" -Value "codex"
     Ensure-Property -Target $State.settings -Name "claudeControlEnabled" -Value $false
@@ -504,6 +516,11 @@ function Normalize-State {
         $State.settings.taskbarBadgeDualDetail = "all"
     }
     $State.settings.taskbarBadgeResetCountdown = ($State.settings.taskbarBadgeResetCountdown -eq $true)
+    $State.settings.taskbarBadgeResetCountdownWeekly = ($State.settings.taskbarBadgeResetCountdownWeekly -eq $true)
+    if ([string]$State.settings.openCodeGoKeySource -notin @("auto", "saved")) { $State.settings.openCodeGoKeySource = "auto" }
+    $State.settings.notifyLowAllowance = ($State.settings.notifyLowAllowance -eq $true)
+    $State.settings.notifyReset = ($State.settings.notifyReset -eq $true)
+    if ([int]$State.settings.notifyLowThreshold -notin @(5, 10, 20, 25)) { $State.settings.notifyLowThreshold = 10 }
     if ($null -eq $State.settings.keepClaudeCodeAlive) {
         $State.settings.keepClaudeCodeAlive = $false
     }
@@ -724,6 +741,7 @@ function Format-TimeLeft {
 . (Join-Path $PSScriptRoot "QwenTokenPlan.ps1")
 . (Join-Path $PSScriptRoot "CollectorPolicy.ps1")
 . (Join-Path $PSScriptRoot "ExternalUsageAdapters.ps1")
+. (Join-Path $PSScriptRoot "UtpUpdate.ps1")
 
 function Get-ResetStatus {
     param($Reset)
@@ -1996,12 +2014,13 @@ function Get-TaskbarBadgeSegment {
         $windows = @(if ($null -ne $tightest) { $tightest } else { $windows[0] })
     }
     $countdownEnabled = $null -ne $script:State -and [bool]$script:State.settings.taskbarBadgeResetCountdown
+    $longCountdown = $countdownEnabled -and [bool]$script:State.settings.taskbarBadgeResetCountdownWeekly
     $items = @(foreach ($item in (@($windows) + @($marks))) {
         # Only short windows count down; a cached or unknown value never gets a countdown.
-        $countdown = if ($countdownEnabled -and [string]$item.Label -match '5h$' -and [string]$item.Text -ne '--' -and -not [bool]$data.Cached) { Format-BadgeResetCountdown ([string]$item.ResetsAt) } else { '' }
+        $countdown = if ($countdownEnabled -and ([string]$item.Label -match "5h$" -or ($longCountdown -and [string]$item.Label -match "(weekly|monthly|\d+d)$")) -and [string]$item.Text -ne '--' -and -not [bool]$data.Cached) { Format-BadgeResetCountdown ([string]$item.ResetsAt) } else { '' }
         [pscustomobject]@{ Label = (Get-BadgeCompactLabel ([string]$item.Label)); Text = [string]$item.Text; Color = $item.Color; Countdown = $countdown }
     })
-    return [pscustomobject]@{ Source = $Source; Items = $items; Cached = [bool]$data.Cached }
+    return [pscustomobject]@{ Source = $Source; Items = $items; Cached = [bool]$data.Cached; Attention = (Get-ProviderAttention -Source $Source) }
 }
 
 function Format-BadgeResetCountdown {
@@ -2019,7 +2038,7 @@ function Format-BadgeResetCountdown {
     if ($minutes -lt 60) { return "${minutes}m" }
     $hours = [int][Math]::Floor($minutes / 60)
     $rest = $minutes % 60
-    if ($hours -ge 24) { return "$([int][Math]::Floor($hours / 24))d$($hours % 24)h" }
+    if ($hours -ge 24) { $days = [int][Math]::Floor($hours / 24); if ($hours % 24 -eq 0) { return "${days}d" } return "${days}d$($hours % 24)h" }
     if ($rest -eq 0) { return "${hours}h" }
     return ('{0}h{1:00}m' -f $hours, $rest)
 }
@@ -2057,7 +2076,7 @@ function Get-TaskbarBadgeSegmentLayout {
             $x += $countdownWidth
         }
     }
-    return [pscustomobject]@{ Source = $Segment.Source; Start = $Origin; LogoX = $Origin; End = $x; Parts = $parts; Items = $items }
+    return [pscustomobject]@{ Source = $Segment.Source; Start = $Origin; LogoX = $Origin; End = $x; Parts = $parts; Items = $items; Attention = [bool]$Segment.Attention }
 }
 
 function Get-TaskbarBadgeDualData {
@@ -2079,7 +2098,7 @@ function Get-TaskbarBadgeDualData {
         $segment = Get-TaskbarBadgeSegmentLayout -Segment (Get-TaskbarBadgeSegment -Source $Sources[$index] -Detail $Detail) -Origin $x
         $segments += $segment
         # Provider markers keep the render signature unique when two sides swap.
-        $items += [pscustomobject]@{ Label = "@" + $segment.Source; Text = ""; Color = $null }
+        $items += [pscustomobject]@{ Label = "@" + $segment.Source + $(if ($segment.Attention) { "!" } else { "" }); Text = ""; Color = $null }
         $items += @($segment.Items)
         $x = $segment.End
     }
@@ -2117,6 +2136,57 @@ function Get-TaskbarBadgeSingleLayout {
 function Get-TaskbarBadgeDividerColor {
     if ($script:BadgeTheme -ne 'Dark') { return [System.Drawing.Color]::FromArgb(206,211,220) }
     return [System.Drawing.Color]::FromArgb(82,85,96)
+}
+
+$script:ProviderAttentionCodes = @('auth_expired','auth_required','api_key_required','subscription_required','setup_required','credential_unreadable','unsupported_auth_context','access_denied')
+
+function Get-ProviderAttentionCode {
+    param([string]$Source)
+    # The provider needs the user (sign in, new key, setup); retries alone will not fix it.
+    $code = ''
+    try {
+        switch ($Source) {
+            'codex' { $code = [string]$script:State.liveUsage.lastError }
+            'claude' { if ([bool]$script:State.settings.claudeControlEnabled) { $code = [string](Get-ClaudeUsageSnapshot).errorCode } }
+            'antigravity' { $code = [string](Get-AntigravityUsageSnapshot).errorCode }
+            'opencodego' { if ([bool]$script:State.settings.openCodeGoEnabled) { $code = [string](Get-OpenCodeGoUsageSnapshot).lastError } }
+            'qwen' { if ([bool]$script:State.settings.qwenTokenPlanEnabled) { $code = [string](Get-QwenUsageSnapshot).lastError } }
+        }
+    }
+    catch { $code = '' }
+    if ($code -in $script:ProviderAttentionCodes) { return $code }
+    return ''
+}
+
+function Get-ProviderAttention {
+    param([string]$Source)
+    return -not [string]::IsNullOrEmpty((Get-ProviderAttentionCode -Source $Source))
+}
+
+function Get-TaskbarBadgeAttentionColor {
+    if ($script:BadgeTheme -ne 'Dark') { return [System.Drawing.Color]::FromArgb(214, 48, 49) }
+    return [System.Drawing.Color]::FromArgb(255, 102, 92)
+}
+
+function Draw-BadgeAttentionDot {
+    param(
+        [System.Drawing.Graphics]$Graphics,
+        [System.Drawing.Rectangle]$LogoRect,
+        [System.Drawing.Color]$Surface
+    )
+    # A small badge on the logo's top-right corner, separated from the mark by a surface ring.
+    $diameter = [float][Math]::Max(5, [Math]::Round($LogoRect.Width * 0.42))
+    $ring = [float][Math]::Max(1.5, $diameter * 0.22)
+    $x = [float]($LogoRect.Right - $diameter + 1)
+    $y = [float]($LogoRect.Top - 1)
+    $Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $ringBrush = New-Object System.Drawing.SolidBrush $Surface
+    $dotBrush = New-Object System.Drawing.SolidBrush (Get-TaskbarBadgeAttentionColor)
+    try {
+        $Graphics.FillEllipse($ringBrush, $x - $ring, $y - $ring, $diameter + 2 * $ring, $diameter + 2 * $ring)
+        $Graphics.FillEllipse($dotBrush, $x, $y, $diameter, $diameter)
+    }
+    finally { $ringBrush.Dispose(); $dotBrush.Dispose() }
 }
 
 function Get-TaskbarBadgeMutedColor {
@@ -2193,6 +2263,11 @@ function Draw-TaskbarBadgeSegment {
 
     $logoRect = New-Object System.Drawing.Rectangle (ConvertTo-BadgePixels ($Segment.LogoX + $OffsetX)), ($Context.LogoTop + $OffsetY), $Context.LogoSize, $Context.LogoSize
     [UtpPillForm]::DrawPicture($Bitmap, (Get-BadgeSegmentLogo -Source $Segment.Source -Size $Context.LogoSize), $logoRect, $Clip)
+    if ([bool]$Segment.Attention) {
+        $graphics = [System.Drawing.Graphics]::FromImage($Bitmap)
+        try { $graphics.SetClip($Clip); Draw-BadgeAttentionDot -Graphics $graphics -LogoRect $logoRect -Surface $Context.Surface }
+        finally { $graphics.Dispose() }
+    }
     foreach ($part in @($Segment.Parts)) {
         $rect = New-Object System.Drawing.Rectangle (ConvertTo-BadgePixels ($part.X + $OffsetX)), (1 + $OffsetY), (ConvertTo-BadgePixels $part.Width), $Context.TextHeight
         if ($part.Kind -eq 'clock') {
@@ -3042,13 +3117,20 @@ function Set-BadgePictureBoxImage {
         return
     }
 
-    $imageKey = "$Source|$script:BadgeTheme"
+    $attention = Get-ProviderAttention -Source $Source
+    $imageKey = "$Source|$script:BadgeTheme" + $(if ($attention) { "|attention" } else { "" })
     if ([string]$PictureBox.Tag -eq $imageKey -and $null -ne $PictureBox.Image -and $PictureBox.Image.Width -eq $PictureBox.Width) {
         return
     }
 
     $oldImage = $PictureBox.Image
-    $PictureBox.Image = New-BadgeLogoImage -Size $PictureBox.Width -Source $Source -DarkSurface:($script:BadgeTheme -eq 'Dark')
+    $image = New-BadgeLogoImage -Size $PictureBox.Width -Source $Source -DarkSurface:($script:BadgeTheme -eq 'Dark')
+    if ($attention) {
+        $graphics = [System.Drawing.Graphics]::FromImage($image)
+        try { Draw-BadgeAttentionDot -Graphics $graphics -LogoRect (New-Object System.Drawing.Rectangle 0, 1, $image.Width, $image.Height) -Surface (Get-TaskbarBadgeColor) }
+        finally { $graphics.Dispose() }
+    }
+    $PictureBox.Image = $image
     $PictureBox.Tag = $imageKey
     if ($null -ne $oldImage) {
         $oldImage.Dispose()
@@ -3210,6 +3292,8 @@ function Get-TaskbarBadgeRenderSignature {
     param([Parameter(Mandatory = $true)] [object]$Data)
 
     $parts = @([string]$Data.Source, [string]$Data.Width, $script:BadgeTheme)
+    # Dual data carries attention in its provider markers; a single provider adds it here.
+    if ([string]$Data.Source -ne 'dual') { $parts += "attention=" + (Get-ProviderAttention -Source ([string]$Data.Source)) }
     foreach ($item in @($Data.Items)) {
         $color = 0
         if ($null -ne $item.Color) {
@@ -3437,6 +3521,10 @@ function Invoke-TaskbarBadgeMouseUp {
         }
         return
     }
+    if ($EventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Middle) {
+        Show-QuickPanel
+        return
+    }
     if ($EventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
         if ((Get-TaskbarBadgeLayout) -eq "dual") {
             Invoke-TaskbarBadgeDualClick -X $EventArgs.X
@@ -3541,6 +3629,7 @@ function Set-TaskbarBadgePreference {
         [string]$Source = "",
         [string]$Detail = "",
         [string]$Countdown = "",
+        [string]$CountdownWeekly = "",
         [switch]$Swap
     )
 
@@ -3558,6 +3647,7 @@ function Set-TaskbarBadgePreference {
     }
     if ($Detail -in @("all", "tightest")) { $settings.taskbarBadgeDualDetail = $Detail }
     if ($Countdown -in @("on", "off")) { $settings.taskbarBadgeResetCountdown = ($Countdown -eq "on") }
+    if ($CountdownWeekly -in @("on", "off")) { $settings.taskbarBadgeResetCountdownWeekly = ($CountdownWeekly -eq "on") }
     Save-State
     $script:PendingStateSave = $false
     Reset-TaskbarBadgeTransition
@@ -3897,6 +3987,76 @@ function Get-StatusSnapshot {
     }
 }
 
+function Get-UtpInstallRoot {
+    return (Split-Path $PSScriptRoot -Parent)
+}
+
+function Get-UtpAppIconPath {
+    $path = Join-Path (Get-UtpInstallRoot) "assets\app-icon.ico"
+    if (Test-Path -LiteralPath $path) { return $path }
+    return (Get-TrayIconPath -Theme Light)
+}
+
+function Get-UtpAppIcon {
+    param([int]$Size = 0)
+    $path = Get-UtpAppIconPath
+    if ([string]::IsNullOrWhiteSpace([string]$path)) { return $null }
+    try {
+        if ($Size -gt 0) { return (New-Object System.Drawing.Icon -ArgumentList $path, $Size, $Size) }
+        return (New-Object System.Drawing.Icon -ArgumentList $path)
+    }
+    catch { return $null }
+}
+
+function Get-UtpLaunchCommand {
+    $wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
+    $launcher = Join-Path $PSScriptRoot "Launch-UsageTrayPill.vbs"
+    return "`"$wscript`" `"$launcher`""
+}
+
+function Set-UtpWindowShellIdentity {
+    param([System.Windows.Forms.Form]$Form)
+    if ($null -eq $Form -or $Form.IsDisposed -or -not ('UtpShellIdentity' -as [type])) { return }
+    try {
+        # Own taskbar group: UTP's icon instead of PowerShell's, and pinning relaunches UTP.
+        [void][UtpShellIdentity]::SetWindowIdentity($Form.Handle, [UtpShellIdentity]::AppId, (Get-UtpLaunchCommand), ((Get-UtpAppIconPath) + ",0"), $script:AppName)
+    }
+    catch {
+    }
+}
+
+function Initialize-UtpProcessIdentity {
+    # A process-wide ID makes notifications show "Usage Tray Pill"; Windows only accepts
+    # that when a Start-menu shortcut carries the same ID, so check before claiming it.
+    if (-not ('UtpShellIdentity' -as [type])) { return $false }
+    $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) "Usage Tray Pill.lnk"
+    if (-not (Test-Path -LiteralPath $shortcut)) { return $false }
+    try {
+        if ([UtpShellIdentity]::GetShortcutAppId($shortcut) -ne [UtpShellIdentity]::AppId) { return $false }
+        return [UtpShellIdentity]::SetProcessAppId([UtpShellIdentity]::AppId)
+    }
+    catch { return $false }
+}
+
+function Initialize-UtpForm {
+    param([System.Windows.Forms.Form]$Form)
+    if ($null -eq $Form) { return }
+    $icon = Get-UtpAppIcon
+    if ($null -ne $icon) {
+        $Form.Icon = $icon
+        $Form.Add_Disposed({ param($eventSource,$eventData) if ($null -ne $eventSource.Icon) { try { $eventSource.Icon.Dispose() } catch { } } })
+    }
+    $Form.Add_HandleCreated({
+        param($eventSource, $eventData)
+        Set-UtpWindowShellIdentity -Form $eventSource
+        Set-UtpWindowTheme -Form $eventSource
+    })
+    $Form.Add_HandleDestroyed({
+        param($eventSource, $eventData)
+        if ('UtpShellIdentity' -as [type]) { try { [UtpShellIdentity]::ClearWindowIdentity($eventSource.Handle) } catch { } }
+    })
+}
+
 function Get-TrayIconPath {
     param(
         [ValidateSet("Light", "Dark")]
@@ -3945,6 +4105,18 @@ function New-TrayIcon {
         [ValidateSet("Light", "Dark")]
         [string]$Theme = (Get-SystemTrayIconTheme)
     )
+
+    # The app icon reads on light and dark taskbars; its frames are drawn per pixel size,
+    # so pick the notification-area size instead of scaling a large image down.
+    $appIconPath = Join-Path (Get-UtpInstallRoot) "assets\app-icon.ico"
+    if (Test-Path -LiteralPath $appIconPath) {
+        try {
+            $traySize = [Math]::Max(16, [System.Windows.Forms.SystemInformation]::SmallIconSize.Width)
+            return (New-Object System.Drawing.Icon -ArgumentList $appIconPath, $traySize, $traySize)
+        }
+        catch {
+        }
+    }
 
     $assetPath = Get-TrayIconImagePath -Theme $Theme
     if (-not [string]::IsNullOrWhiteSpace($assetPath)) {
@@ -4029,6 +4201,14 @@ function Get-TrayIconRenderSignature {
         [string]$Theme = (Get-SystemTrayIconTheme)
     )
 
+    $appIconPath = Join-Path (Get-UtpInstallRoot) "assets\app-icon.ico"
+    if (Test-Path -LiteralPath $appIconPath) {
+        $appIconVersion = ""
+        try { $appIconVersion = (Get-Item -LiteralPath $appIconPath).LastWriteTimeUtc.Ticks } catch {
+        }
+        return "app|$([System.Windows.Forms.SystemInformation]::SmallIconSize.Width)|$appIconVersion"
+    }
+
     $assetPath = Get-TrayIconImagePath -Theme $Theme
     if (-not [string]::IsNullOrWhiteSpace($assetPath)) {
         $assetVersion = ""
@@ -4061,6 +4241,135 @@ function Get-TooltipText {
     return Limit-Text -Text ($parts -join " | ") -MaxLength 63
 }
 
+$script:NotificationState = $null
+
+function Get-UsageNotificationPath {
+    return (Join-Path $script:DataDir "notifications-state.json")
+}
+
+function Get-UsageNotificationObservations {
+    # Known, fresh allowance windows of every enabled provider. Cached or unknown values never notify.
+    $names = @{codex='ChatGPT';claude='Claude';antigravity='Antigravity';opencodego='OpenCode Go';qwen='Qwen'}
+    foreach ($source in @(Get-TaskbarBadgeSources)) {
+        $data = Get-TaskbarBadgeData -Source $source
+        if ([bool]$data.Cached) { continue }
+        foreach ($item in @($data.Items)) {
+            $percent = Get-BadgeItemPercent $item
+            if ($null -eq $percent -or [string]$item.Label -eq 'cache') { continue }
+            [pscustomobject]@{
+                Key = "$source|$([string]$item.Label)"
+                Provider = $names[$source]
+                Label = [string]$item.Label
+                Percent = [double]$percent
+                ResetsAt = [string]$item.ResetsAt
+            }
+        }
+    }
+}
+
+function Get-UsageWindowTitle {
+    param([string]$Label)
+    switch -Regex ($Label) {
+        '5h$' { return '5-hour limit' }
+        'weekly$' { return 'weekly limit' }
+        'monthly$' { return 'monthly limit' }
+        default { return "$Label limit" }
+    }
+}
+
+function Get-UsageNotificationEvents {
+    param(
+        [hashtable]$State,
+        [object[]]$Observations,
+        [int]$Threshold = 10,
+        [bool]$NotifyLow = $false,
+        [bool]$NotifyReset = $false,
+        [DateTimeOffset]$Now = [DateTimeOffset]::Now
+    )
+
+    # Pure decision logic: returns events and updates $State in place, so restarts stay quiet.
+    $events = @()
+    foreach ($observation in @($Observations)) {
+        $previous = $State[$observation.Key]
+        $record = @{ percent = $observation.Percent; resetsAt = $observation.ResetsAt; low = $false }
+        if ($null -ne $previous) {
+            $record.low = [bool]$previous.low
+            $reset = $false
+            $previousReset = [DateTimeOffset]::MinValue
+            $currentReset = [DateTimeOffset]::MinValue
+            $hasPrevious = [DateTimeOffset]::TryParse([string]$previous.resetsAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeLocal, [ref]$previousReset)
+            $hasCurrent = [DateTimeOffset]::TryParse([string]$observation.ResetsAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeLocal, [ref]$currentReset)
+            if ($hasPrevious -and $hasCurrent) {
+                $reset = $currentReset -gt $previousReset.AddMinutes(1) -and $observation.Percent -gt ([double]$previous.percent + 0.5)
+            }
+            elseif ($observation.Percent - [double]$previous.percent -ge 30) {
+                $reset = $true
+            }
+            if ($reset) {
+                $record.low = $false
+                if ($NotifyReset) {
+                    $events += [pscustomobject]@{ Kind = 'reset'; Key = $observation.Key; Title = "$($observation.Provider) $(Get-UsageWindowTitle $observation.Label) reset"; Text = "$(Format-RemainingPercent $observation.Percent) available again." }
+                }
+            }
+            if ($observation.Percent -ge $Threshold + 5) { $record.low = $false }
+        }
+        if ($observation.Percent -lt $Threshold -and -not $record.low) {
+            $record.low = $true
+            if ($NotifyLow) {
+                $countdown = Format-BadgeResetCountdown -ResetsAt $observation.ResetsAt -Now $Now
+                $tail = if ($countdown) { " Resets in $countdown." } else { "" }
+                $events += [pscustomobject]@{ Kind = 'low'; Key = $observation.Key; Title = "$($observation.Provider) $(Get-UsageWindowTitle $observation.Label)"; Text = "Only $(Format-RemainingPercent $observation.Percent) left.$tail" }
+            }
+        }
+        $State[$observation.Key] = $record
+    }
+    return @($events)
+}
+
+function Read-UsageNotificationState {
+    $state = @{}
+    try {
+        $path = Get-UsageNotificationPath
+        if (Test-Path -LiteralPath $path) {
+            $saved = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            foreach ($property in @($saved.PSObject.Properties)) {
+                $state[$property.Name] = @{ percent = [double]$property.Value.percent; resetsAt = [string]$property.Value.resetsAt; low = [bool]$property.Value.low }
+            }
+        }
+    }
+    catch { $state = @{} }
+    return $state
+}
+
+function Send-UtpNotification {
+    param([string]$Title, [string]$Text)
+    if ($null -eq $script:NotifyIcon) { return }
+    try { $script:NotifyIcon.ShowBalloonTip(10000, $Title, $Text, [System.Windows.Forms.ToolTipIcon]::None) } catch {
+    }
+}
+
+function Update-UsageNotifications {
+    $settings = $script:State.settings
+    if (-not ([bool]$settings.notifyLowAllowance -or [bool]$settings.notifyReset)) { return }
+    if ($null -eq $script:NotificationState) { $script:NotificationState = Read-UsageNotificationState }
+    $before = $script:NotificationState | ConvertTo-Json -Depth 4 -Compress
+    $events = Get-UsageNotificationEvents -State $script:NotificationState -Observations @(Get-UsageNotificationObservations) -Threshold ([int]$settings.notifyLowThreshold) -NotifyLow ([bool]$settings.notifyLowAllowance) -NotifyReset ([bool]$settings.notifyReset)
+    # Windows shows one balloon at a time; the most recent event is the one that matters.
+    if (@($events).Count -gt 0) {
+        $latest = @($events)[-1]
+        Send-UtpNotification -Title $latest.Title -Text $(if (@($events).Count -gt 1) { "$($latest.Text) (+$(@($events).Count - 1) more)" } else { $latest.Text })
+    }
+    $after = $script:NotificationState | ConvertTo-Json -Depth 4 -Compress
+    if ($after -ne $before) {
+        try {
+            Ensure-DataDirectory
+            [IO.File]::WriteAllText((Get-UsageNotificationPath), $after, (New-Object System.Text.UTF8Encoding($false)))
+        }
+        catch {
+        }
+    }
+}
+
 function Refresh-Tray {
     if ($null -eq $script:NotifyIcon) {
         return
@@ -4091,6 +4400,96 @@ function Refresh-Tray {
         }
     }
     Refresh-TaskbarBadge
+    Update-UsageNotifications
+}
+
+function Show-UtpUpdateDialog {
+    param([object]$Update)
+    $form = New-Object System.Windows.Forms.Form
+    Initialize-UtpForm -Form $form
+    $form.Text = "Update Usage Tray Pill"
+    $form.StartPosition = "CenterScreen"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.ClientSize = New-Object System.Drawing.Size 460, 190
+    $form.Font = New-Object System.Drawing.Font "Segoe UI", 9
+    $heading = New-Object System.Windows.Forms.Label
+    $heading.Text = "Version $($Update.Version) is available"
+    $heading.Font = New-Object System.Drawing.Font "Segoe UI Semibold", 13
+    $heading.Location = New-Object System.Drawing.Point 20, 18
+    $heading.Size = New-Object System.Drawing.Size 420, 30
+    $form.Controls.Add($heading)
+    $body = New-Object System.Windows.Forms.Label
+    $body.Text = "You have $script:AppVersion. UTP downloads the release from GitHub, verifies its checksum, keeps your current version as a backup and restarts. Your settings stay as they are."
+    $body.Location = New-Object System.Drawing.Point 20, 54
+    $body.Size = New-Object System.Drawing.Size 420, 72
+    $body.ForeColor = [System.Drawing.Color]::FromArgb(82, 87, 97)
+    $form.Controls.Add($body)
+    $notes = New-Object System.Windows.Forms.Button
+    $notes.Text = "Release notes"
+    $notes.Location = New-Object System.Drawing.Point 20, 140
+    $notes.Size = New-Object System.Drawing.Size 120, 32
+    Set-MainWindowButtonStyle -Button $notes
+    $notes.DialogResult = [System.Windows.Forms.DialogResult]::Retry
+    $form.Controls.Add($notes)
+    $later = New-Object System.Windows.Forms.Button
+    $later.Text = "Later"
+    $later.Location = New-Object System.Drawing.Point 236, 140
+    $later.Size = New-Object System.Drawing.Size 90, 32
+    Set-MainWindowButtonStyle -Button $later
+    $later.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($later)
+    $update = New-Object System.Windows.Forms.Button
+    $update.Text = "Update now"
+    $update.Location = New-Object System.Drawing.Point 334, 140
+    $update.Size = New-Object System.Drawing.Size 106, 32
+    Set-MainWindowButtonStyle -Button $update -Kind Primary
+    $update.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.Controls.Add($update)
+    $form.AcceptButton = $update
+    $form.CancelButton = $later
+    try {
+        $result = $form.ShowDialog()
+        if ($result -eq [System.Windows.Forms.DialogResult]::OK) { return 'update' }
+        if ($result -eq [System.Windows.Forms.DialogResult]::Retry) { return 'notes' }
+        return 'later'
+    }
+    finally { $form.Dispose() }
+}
+
+function Invoke-UtpUpdateCheck {
+    param([switch]$Interactive)
+    $root = Get-UtpInstallRoot
+    if (Test-UtpSourceCheckout $root) {
+        Show-Message "This copy of UTP runs from a source checkout. Update it with Git instead."
+        return
+    }
+    $previousCursor = [System.Windows.Forms.Cursor]::Current
+    [System.Windows.Forms.Cursor]::Current = [System.Windows.Forms.Cursors]::WaitCursor
+    try { $update = Get-UtpAvailableUpdate -CurrentVersion $script:AppVersion }
+    catch {
+        Show-Message ("UTP could not check for updates. " + (Get-UtpUpdateExceptionMessage $_)) -Icon Warning
+        return
+    }
+    finally { [System.Windows.Forms.Cursor]::Current = $previousCursor }
+    if ($null -eq $update) {
+        Show-Message "Usage Tray Pill $script:AppVersion is up to date."
+        return
+    }
+    $choice = Show-UtpUpdateDialog -Update $update
+    if ($choice -eq 'notes') { Start-Process $update.Page; return }
+    if ($choice -ne 'update') { return }
+    [System.Windows.Forms.Cursor]::Current = [System.Windows.Forms.Cursors]::WaitCursor
+    try { $staged = Save-UtpUpdate -Update $update -InstallRoot $root }
+    catch {
+        [System.Windows.Forms.Cursor]::Current = $previousCursor
+        Show-Message ("The update was not installed. " + (Get-UtpUpdateExceptionMessage $_) + " Your current version keeps running.") -Icon Warning
+        return
+    }
+    Start-UtpUpdateSwap -Staged $staged -InstallRoot $root -PreviousVersion $script:AppVersion -NewVersion $update.Version
+    # The swap waits for this process; exit so the folder can be replaced.
+    Exit-TrayApp
 }
 
 function Show-Message {
@@ -4108,6 +4507,7 @@ function Show-ResetDialog {
 
     $isEdit = $null -ne $Existing
     $form = New-Object System.Windows.Forms.Form
+    if (Get-Command Initialize-UtpForm -ErrorAction SilentlyContinue) { Initialize-UtpForm -Form $form }
     $form.Text = $(if ($isEdit) { "Edit reset" } else { "Add reset" })
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
@@ -4214,6 +4614,7 @@ function Show-LimitDialog {
 
     $isEdit = $null -ne $Existing
     $form = New-Object System.Windows.Forms.Form
+    if (Get-Command Initialize-UtpForm -ErrorAction SilentlyContinue) { Initialize-UtpForm -Form $form }
     $form.Text = $(if ($isEdit) { "Edit limit" } else { "Add limit" })
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
@@ -4392,7 +4793,278 @@ function New-ListView {
     $list.ForeColor = [System.Drawing.Color]::FromArgb(36, 39, 46)
     $list.Font = New-Object System.Drawing.Font "Segoe UI", 10
     $list.HeaderStyle = [System.Windows.Forms.ColumnHeaderStyle]::Nonclickable
+    # Owner-drawn headers follow the overview theme; rows keep native drawing and selection.
+    $list.OwnerDraw = $true
+    $list.Add_DrawColumnHeader({
+        param($eventSource, $eventData)
+        $brush = New-Object System.Drawing.SolidBrush (Get-OverviewColor 'surfaceAlt')
+        $pen = New-Object System.Drawing.Pen (Get-OverviewColor 'divider')
+        try {
+            $eventData.Graphics.FillRectangle($brush, $eventData.Bounds)
+            $eventData.Graphics.DrawLine($pen, $eventData.Bounds.Left, $eventData.Bounds.Bottom - 1, $eventData.Bounds.Right, $eventData.Bounds.Bottom - 1)
+            $textRect = New-Object System.Drawing.Rectangle ($eventData.Bounds.Left + 8), $eventData.Bounds.Top, ([Math]::Max(0, $eventData.Bounds.Width - 12)), $eventData.Bounds.Height
+            $flags = [System.Windows.Forms.TextFormatFlags]::Left -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis -bor [System.Windows.Forms.TextFormatFlags]::SingleLine
+            [System.Windows.Forms.TextRenderer]::DrawText($eventData.Graphics, $eventData.Header.Text, $eventSource.Font, $textRect, (Get-OverviewColor 'muted'), $flags)
+        }
+        finally { $brush.Dispose(); $pen.Dispose() }
+    })
+    $list.Add_DrawItem({ param($eventSource, $eventData) $eventData.DrawDefault = $true })
+    $list.Add_DrawSubItem({ param($eventSource, $eventData) $eventData.DrawDefault = $true })
     return $list
+}
+
+$script:OverviewTheme = "Light"
+$script:UtpThemeRecords = $null
+$script:UtpBackMap = $null
+$script:UtpForeMap = $null
+# Light palette value -> dark counterpart. Backgrounds and text are mapped separately so
+# white text on a coloured button stays white while white surfaces turn dark.
+$script:UtpPalette = [ordered]@{
+    paper      = @(@(245,244,241), @(25,26,30), 'Back')
+    surface    = @(@(255,255,255), @(35,36,41), 'Back')
+    surfaceAlt = @(@(249,250,252), @(41,42,48), 'Back')
+    control    = @(@(240,240,240), @(35,36,41), 'Back')
+    divider    = @(@(237,237,240), @(52,54,61), 'Back')
+    track      = @(@(235,235,239), @(58,60,68), 'Back')
+    buttonBack = @(@(239,238,235), @(50,52,59), 'Back')
+    border     = @(@(205,209,216), @(74,77,87), 'Back')
+    hover      = @(@(245,246,248), @(60,63,72), 'Back')
+    pressed    = @(@(235,237,241), @(68,71,81), 'Back')
+    meterIdle  = @(@(169,173,184), @(104,109,122), 'Back')
+    input      = @(@(255,255,254), @(45,46,52), 'Back')
+    ink        = @(@(36,39,46), @(234,236,242), 'Fore')
+    ink2       = @(@(36,38,44), @(234,236,242), 'Fore')
+    label      = @(@(52,56,64), @(220,223,230), 'Fore')
+    buttonText = @(@(45,48,56), @(226,228,235), 'Fore')
+    muted      = @(@(103,108,118), @(160,165,178), 'Fore')
+    muted2     = @(@(99,104,117), @(160,165,178), 'Fore')
+    muted3     = @(@(82,87,97), @(172,177,189), 'Fore')
+    unknown    = @(@(132,136,145), @(132,137,150), 'Fore')
+    text       = @(@(0,0,0), @(234,236,242), 'Fore')
+}
+
+function Get-UtpAppTheme {
+    # The overview follows the Windows app mode (Settings > Personalization > Colors).
+    try {
+        $value = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -ErrorAction Stop
+        if ([int]$value.AppsUseLightTheme -eq 0) { return "Dark" }
+    }
+    catch {
+    }
+    return "Light"
+}
+
+function Get-OverviewColor {
+    param([string]$Name)
+    $entry = $script:UtpPalette[$Name]
+    if ($null -eq $entry) { return [System.Drawing.Color]::Magenta }
+    $rgb = if ($script:OverviewTheme -eq "Dark") { $entry[1] } else { $entry[0] }
+    return [System.Drawing.Color]::FromArgb(255, $rgb[0], $rgb[1], $rgb[2])
+}
+
+function Initialize-UtpThemeMaps {
+    if ($null -ne $script:UtpBackMap) { return }
+    $script:UtpBackMap = @{}
+    $script:UtpForeMap = @{}
+    foreach ($name in $script:UtpPalette.Keys) {
+        $entry = $script:UtpPalette[$name]
+        $light = [System.Drawing.Color]::FromArgb(255, $entry[0][0], $entry[0][1], $entry[0][2]).ToArgb()
+        $dark = [System.Drawing.Color]::FromArgb(255, $entry[1][0], $entry[1][1], $entry[1][2])
+        if ($entry[2] -eq 'Back') { $script:UtpBackMap[$light] = $dark } else { $script:UtpForeMap[$light] = $dark }
+    }
+    $script:UtpThemeRecords = New-Object 'System.Runtime.CompilerServices.ConditionalWeakTable[object,object]'
+}
+
+function Get-UtpThemeTarget {
+    param([hashtable]$Record, [string]$Key, [System.Drawing.Color]$Current, [hashtable]$Map, [bool]$Dark, [object]$Override = $null)
+    $lightKey = "Light$Key"
+    $appliedKey = "Applied$Key"
+    if (-not $Record.ContainsKey($lightKey) -or $Current.ToArgb() -ne $Record[$appliedKey]) {
+        # First visit, or UTP code assigned a new (light palette) colour since the last pass.
+        $Record[$lightKey] = $Current
+    }
+    $light = $Record[$lightKey]
+    $target = $light
+    if ($Dark) {
+        if ($null -ne $Override -and $Map.ContainsKey($light.ToArgb())) { $target = $Override }
+        elseif ($Map.ContainsKey($light.ToArgb())) { $target = $Map[$light.ToArgb()] }
+    }
+    $Record[$appliedKey] = $target.ToArgb()
+    return $target
+}
+
+function Set-UtpControlTheme {
+    param([System.Windows.Forms.Control]$Control, [bool]$Dark)
+
+    $record = $null
+    if (-not $script:UtpThemeRecords.TryGetValue($Control, [ref]$record)) {
+        $record = @{}
+        $script:UtpThemeRecords.Add($Control, $record)
+    }
+    $isInput = $Control -is [System.Windows.Forms.TextBox] -or $Control -is [System.Windows.Forms.ComboBox] -or $Control -is [System.Windows.Forms.NumericUpDown]
+    $inputBack = if ($isInput) { Get-OverviewColor 'input' } else { $null }
+    if ($isInput -and -not $Dark) { $inputBack = $null }
+    $back = Get-UtpThemeTarget -Record $record -Key 'Back' -Current $Control.BackColor -Map $script:UtpBackMap -Dark $Dark -Override $inputBack
+    if ($back.A -eq 255 -and $Control.BackColor.ToArgb() -ne $back.ToArgb()) { try { $Control.BackColor = $back } catch { } }
+    $fore = Get-UtpThemeTarget -Record $record -Key 'Fore' -Current $Control.ForeColor -Map $script:UtpForeMap -Dark $Dark
+    if ($Control.ForeColor.ToArgb() -ne $fore.ToArgb()) { try { $Control.ForeColor = $fore } catch { } }
+
+    if ($Control -is [System.Windows.Forms.Button]) {
+        if (-not $record.ContainsKey('FlatStyle')) { $record['FlatStyle'] = $Control.FlatStyle }
+        if ($Dark -and $Control.FlatStyle -ne [System.Windows.Forms.FlatStyle]::Flat) {
+            # Standard buttons ignore BackColor under visual styles; flat ones follow the theme.
+            $Control.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+            $Control.UseVisualStyleBackColor = $false
+            $Control.FlatAppearance.BorderColor = Get-OverviewColor 'border'
+        }
+        elseif (-not $Dark -and $record['FlatStyle'] -ne [System.Windows.Forms.FlatStyle]::Flat -and $Control.FlatStyle -eq [System.Windows.Forms.FlatStyle]::Flat) {
+            $Control.FlatStyle = $record['FlatStyle']
+            $Control.UseVisualStyleBackColor = $true
+        }
+        if ($Control.FlatStyle -eq [System.Windows.Forms.FlatStyle]::Flat) {
+            $appearance = $Control.FlatAppearance
+            if ($appearance.BorderColor.A -gt 0) { $appearance.BorderColor = Get-UtpThemeTarget -Record $record -Key 'Border' -Current $appearance.BorderColor -Map $script:UtpBackMap -Dark $Dark }
+            if ($appearance.MouseOverBackColor.A -gt 0) { $appearance.MouseOverBackColor = Get-UtpThemeTarget -Record $record -Key 'Hover' -Current $appearance.MouseOverBackColor -Map $script:UtpBackMap -Dark $Dark }
+            if ($appearance.MouseDownBackColor.A -gt 0) { $appearance.MouseDownBackColor = Get-UtpThemeTarget -Record $record -Key 'Pressed' -Current $appearance.MouseDownBackColor -Map $script:UtpBackMap -Dark $Dark }
+        }
+    }
+    if ($Control -is [System.Windows.Forms.ComboBox]) {
+        if (-not $record.ContainsKey('FlatStyle')) { $record['FlatStyle'] = $Control.FlatStyle }
+        # The native dark combo theme (DarkMode_CFD) draws the frame and arrow, but only in the standard style.
+        $Control.FlatStyle = if ($Dark) { [System.Windows.Forms.FlatStyle]::Standard } else { $record['FlatStyle'] }
+        if ($Control.DropDownStyle -eq [System.Windows.Forms.ComboBoxStyle]::DropDownList -and -not $record.ContainsKey('OwnerDrawn')) {
+            # Drop-down lists ignore BackColor under visual styles; draw them in the palette instead.
+            $record['OwnerDrawn'] = $true
+            $Control.DrawMode = [System.Windows.Forms.DrawMode]::OwnerDrawFixed
+            $Control.Add_DrawItem({
+                param($eventSource, $eventData)
+                $isEdit = ($eventData.State -band [System.Windows.Forms.DrawItemState]::ComboBoxEdit) -ne 0
+                $selected = ($eventData.State -band [System.Windows.Forms.DrawItemState]::Selected) -ne 0
+                $back = if ($selected -and -not $isEdit) { Get-OverviewColor 'hover' } elseif ($script:OverviewTheme -eq 'Dark') { Get-OverviewColor 'input' } else { Get-OverviewColor 'surface' }
+                $fore = if ($eventSource.Enabled) { Get-OverviewColor 'ink' } else { Get-OverviewColor 'muted' }
+                $brush = New-Object System.Drawing.SolidBrush $back
+                try { $eventData.Graphics.FillRectangle($brush, $eventData.Bounds) } finally { $brush.Dispose() }
+                if ($eventData.Index -ge 0) {
+                    $text = $eventSource.GetItemText($eventSource.Items[$eventData.Index])
+                    $rect = New-Object System.Drawing.Rectangle ($eventData.Bounds.Left + 4), $eventData.Bounds.Top, ([Math]::Max(0, $eventData.Bounds.Width - 6)), $eventData.Bounds.Height
+                    $flags = [System.Windows.Forms.TextFormatFlags]::Left -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis -bor [System.Windows.Forms.TextFormatFlags]::SingleLine
+                    [System.Windows.Forms.TextRenderer]::DrawText($eventData.Graphics, $text, $eventSource.Font, $rect, $fore, $flags)
+                }
+            })
+        }
+    }
+    if (($Control -is [System.Windows.Forms.CheckBox] -or $Control -is [System.Windows.Forms.RadioButton]) -and -not $record.ContainsKey('TogglePaint')) {
+        $record['TogglePaint'] = $true
+        # WinForms embosses disabled toggle text and keeps light glyphs on dark surfaces; repaint them in the palette.
+        $Control.Add_Paint({ param($eventSource, $eventData) if ($script:OverviewTheme -eq 'Dark') { Draw-UtpDarkToggle -Control $eventSource -Graphics $eventData.Graphics } })
+    }
+    if ($Control -is [System.Windows.Forms.ListView] -or $Control -is [System.Windows.Forms.TextBox] -or $Control -is [System.Windows.Forms.ComboBox] -or
+        ($Control -is [System.Windows.Forms.ScrollableControl] -and $Control.AutoScroll)) {
+        if (-not $record.ContainsKey('NativeThemeHook')) {
+            $record['NativeThemeHook'] = $true
+            # Controls on unopened tabs create their window later, and some style changes recreate it.
+            $Control.Add_HandleCreated({ param($eventSource, $eventData) Set-UtpNativeControlTheme -Control $eventSource -Force })
+        }
+        Set-UtpNativeControlTheme -Control $Control
+    }
+    foreach ($child in $Control.Controls) { Set-UtpControlTheme -Control $child -Dark $Dark }
+}
+
+function Set-UtpNativeControlTheme {
+    param([System.Windows.Forms.Control]$Control, [switch]$Force)
+    if (-not $Control.IsHandleCreated -or -not ('UtpShellIdentity' -as [type])) { return }
+    $dark = $script:OverviewTheme -eq 'Dark'
+    $themeName = if ($Control -is [System.Windows.Forms.ComboBox]) { if ($dark) { 'DarkMode_CFD' } else { 'CFD' } } elseif ($dark) { 'DarkMode_Explorer' } else { 'Explorer' }
+    $record = $null
+    if ($null -ne $script:UtpThemeRecords -and $script:UtpThemeRecords.TryGetValue($Control, [ref]$record)) {
+        if (-not $Force -and $record['ControlTheme'] -eq $themeName) { return }
+        $record['ControlTheme'] = $themeName
+    }
+    try { [UtpShellIdentity]::SetControlTheme($Control.Handle, $themeName) } catch { }
+}
+
+$script:UtpShowFocusCuesProperty = [System.Windows.Forms.Control].GetProperty('ShowFocusCues', [System.Reflection.BindingFlags]'Instance,NonPublic')
+
+function Draw-UtpDarkToggle {
+    param([System.Windows.Forms.ButtonBase]$Control, [System.Drawing.Graphics]$Graphics)
+
+    $back = $Control.BackColor
+    if ($back.A -lt 255 -and $null -ne $Control.Parent) { $back = $Control.Parent.BackColor }
+    $isRadio = $Control -is [System.Windows.Forms.RadioButton]
+    $checked = [bool]$Control.Checked
+    $enabled = $Control.Enabled
+    $glyph = if ($isRadio) { [System.Windows.Forms.RadioButtonRenderer]::GetGlyphSize($Graphics, [System.Windows.Forms.VisualStyles.RadioButtonState]::UncheckedNormal) } else { [System.Windows.Forms.CheckBoxRenderer]::GetGlyphSize($Graphics, [System.Windows.Forms.VisualStyles.CheckBoxState]::UncheckedNormal) }
+    $size = [float][Math]::Max(12, $glyph.Width)
+    $top = [float][Math]::Floor(($Control.ClientSize.Height - $size) / 2)
+    $accent = if ($enabled) { [System.Drawing.Color]::FromArgb(208, 34, 121) } else { Get-OverviewColor 'meterIdle' }
+    $edge = if ($enabled) { [System.Drawing.Color]::FromArgb(150, 155, 168) } else { Get-OverviewColor 'border' }
+    $textColor = if ($enabled) { $Control.ForeColor } else { Get-OverviewColor 'unknown' }
+    $backBrush = New-Object System.Drawing.SolidBrush $back
+    $fillBrush = New-Object System.Drawing.SolidBrush $(if ($checked) { $accent } else { Get-OverviewColor 'input' })
+    $edgePen = New-Object System.Drawing.Pen $edge, 1
+    $markPen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), ([float][Math]::Max(1.6, $size / 8))
+    $previousMode = $Graphics.SmoothingMode
+    try {
+        $Graphics.FillRectangle($backBrush, $Control.ClientRectangle)
+        $Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        if ($isRadio) {
+            $Graphics.FillEllipse($fillBrush, 0.5, $top + 0.5, $size - 1, $size - 1)
+            if ($checked) {
+                $dot = $size * 0.38
+                $Graphics.FillEllipse([System.Drawing.Brushes]::White, ($size - $dot) / 2, $top + ($size - $dot) / 2, $dot, $dot)
+            }
+            else { $Graphics.DrawEllipse($edgePen, 0.5, $top + 0.5, $size - 1, $size - 1) }
+        }
+        else {
+            $radius = [float][Math]::Max(2, $size / 5)
+            $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+            $path.AddArc(0.5, $top + 0.5, 2 * $radius, 2 * $radius, 180, 90)
+            $path.AddArc($size - 0.5 - 2 * $radius, $top + 0.5, 2 * $radius, 2 * $radius, 270, 90)
+            $path.AddArc($size - 0.5 - 2 * $radius, $top + $size - 0.5 - 2 * $radius, 2 * $radius, 2 * $radius, 0, 90)
+            $path.AddArc(0.5, $top + $size - 0.5 - 2 * $radius, 2 * $radius, 2 * $radius, 90, 90)
+            $path.CloseFigure()
+            try {
+                $Graphics.FillPath($fillBrush, $path)
+                if ($checked) {
+                    $points = [System.Drawing.PointF[]]@(
+                        (New-Object System.Drawing.PointF ($size * 0.26), ($top + $size * 0.52)),
+                        (New-Object System.Drawing.PointF ($size * 0.43), ($top + $size * 0.69)),
+                        (New-Object System.Drawing.PointF ($size * 0.75), ($top + $size * 0.33)))
+                    $Graphics.DrawLines($markPen, $points)
+                }
+                else { $Graphics.DrawPath($edgePen, $path) }
+            }
+            finally { $path.Dispose() }
+        }
+        $textLeft = [int][Math]::Ceiling($size) + 5
+        $textRect = New-Object System.Drawing.Rectangle $textLeft, 0, ([Math]::Max(0, $Control.ClientSize.Width - $textLeft)), $Control.ClientSize.Height
+        $flags = [System.Windows.Forms.TextFormatFlags]::Left -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::SingleLine -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis
+        if ($Control.UseMnemonic) { $flags = $flags -bor [System.Windows.Forms.TextFormatFlags]::HidePrefix } else { $flags = $flags -bor [System.Windows.Forms.TextFormatFlags]::NoPrefix }
+        [System.Windows.Forms.TextRenderer]::DrawText($Graphics, $Control.Text, $Control.Font, $textRect, $textColor, $flags)
+        # Like native controls, show the focus rectangle only once Windows shows keyboard cues.
+        if ($Control.Focused -and ($null -eq $script:UtpShowFocusCuesProperty -or [bool]$script:UtpShowFocusCuesProperty.GetValue($Control, $null))) {
+            $measured = [System.Windows.Forms.TextRenderer]::MeasureText($Graphics, $Control.Text, $Control.Font, $textRect.Size, $flags)
+            $focusRect = New-Object System.Drawing.Rectangle ($textLeft - 1), ([int](($Control.ClientSize.Height - $measured.Height) / 2)), ([Math]::Min($textRect.Width, $measured.Width) + 2), $measured.Height
+            [System.Windows.Forms.ControlPaint]::DrawFocusRectangle($Graphics, $focusRect, $textColor, $back)
+        }
+    }
+    finally {
+        $Graphics.SmoothingMode = $previousMode
+        $backBrush.Dispose(); $fillBrush.Dispose(); $edgePen.Dispose(); $markPen.Dispose()
+    }
+}
+
+function Set-UtpWindowTheme {
+    param([System.Windows.Forms.Form]$Form)
+    if ($null -eq $Form -or $Form.IsDisposed) { return }
+    Initialize-UtpThemeMaps
+    $script:OverviewTheme = Get-UtpAppTheme
+    $dark = $script:OverviewTheme -eq "Dark"
+    if ($Form.IsHandleCreated -and ('UtpShellIdentity' -as [type])) { [void][UtpShellIdentity]::SetDarkTitleBar($Form.Handle, $dark) }
+    $Form.SuspendLayout()
+    try { Set-UtpControlTheme -Control $Form -Dark $dark }
+    finally { $Form.ResumeLayout() }
+    $Form.Invalidate($true)
 }
 
 function Set-MainWindowButtonStyle {
@@ -4436,12 +5108,8 @@ function Set-MainWindowListRows {
     for ($index = 0; $index -lt $List.Items.Count; $index++) {
         $item = $List.Items[$index]
         $item.ToolTipText = (@($item.SubItems | ForEach-Object { $_.Text }) -join " | ")
-        $item.BackColor = if (($index % 2) -eq 0) {
-            [System.Drawing.Color]::White
-        }
-        else {
-            [System.Drawing.Color]::FromArgb(249, 250, 252)
-        }
+        $item.BackColor = if (($index % 2) -eq 0) { Get-OverviewColor "surface" } else { Get-OverviewColor "surfaceAlt" }
+        $item.ForeColor = Get-OverviewColor "ink"
     }
 }
 
@@ -4488,6 +5156,8 @@ function Exit-TrayApp {
 }
 
 function Update-MainWindow {
+    # Decide the theme first: list rows and provider icons below read the palette directly.
+    $script:OverviewTheme = Get-UtpAppTheme
     $form = $script:MainForm
     $header = $script:MainWindowControls.Header
     $liveStatusLabel = $script:MainWindowControls.Status
@@ -4502,6 +5172,7 @@ function Update-MainWindow {
 
         if ($null -ne $script:MainWindowControls.QwenEnabled) { $script:MainWindowControls.QwenEnabled.Checked=[bool]$script:State.settings.qwenTokenPlanEnabled }
         if($null -ne $script:MainWindowControls.FullscreenHide){$script:MainWindowControls.FullscreenHide.Checked=[bool]$script:State.settings.hideTaskbarBadgeInFullscreen}
+        if($null -ne $script:MainWindowControls.NotifyLow){$script:MainWindowControls.NotifyLow.Checked=[bool]$script:State.settings.notifyLowAllowance;$script:MainWindowControls.NotifyReset.Checked=[bool]$script:State.settings.notifyReset}
         if($null -ne $script:MainWindowControls.ClaudeControl){$script:MainWindowControls.ClaudeControl.Checked=[bool]$script:State.settings.claudeControlEnabled}
         Update-CodexBucketChoices
         Update-PillPreferencesPage
@@ -4662,7 +5333,31 @@ function Update-MainWindow {
                 $list.EndUpdate()
             }
         }
+        # Re-apply the theme: refreshes assign light-palette colours, and Windows may have switched mode.
+        Set-UtpWindowTheme -Form $form
+        if ($null -ne $script:MainWindowControls.Tabs) { Update-TabStripFill -Tabs $script:MainWindowControls.Tabs }
         Refresh-Tray
+}
+
+function Update-TabStripFill {
+    param([System.Windows.Forms.TabControl]$Tabs, [System.Windows.Forms.Control]$Fill)
+    if ($null -eq $Tabs -or $Tabs.IsDisposed -or $Tabs.TabCount -eq 0) { return }
+    # Windows draws a light 3D frame around the pages and a light strip beside the tabs,
+    # whatever the colours. Clip the control to the tab buttons plus the page area so the
+    # window background shows instead, in both themes.
+    $region = New-Object System.Drawing.Region (New-Object System.Drawing.Rectangle 0, 0, 0, 0)
+    for ($index = 0; $index -lt $Tabs.TabCount; $index++) {
+        $tab = $Tabs.GetTabRect($index)
+        # Inset by 2 px: the system frame around each tab falls outside, leaving clean gaps.
+        # Only the selected tab joins the page; the others stop above the system frame line below them.
+        $height = if ($index -eq $Tabs.SelectedIndex) { $tab.Height + 2 } else { $tab.Height - 4 }
+        $region.Union((New-Object System.Drawing.Rectangle ($tab.Left + 2), ($tab.Top + 2), ([Math]::Max(1, $tab.Width - 4)), $height))
+    }
+    $region.Union($Tabs.DisplayRectangle)
+    $old = $Tabs.Region
+    $Tabs.Region = $region
+    if ($null -ne $old) { $old.Dispose() }
+    if ($null -ne $Fill -and -not $Fill.IsDisposed) { $Fill.Visible = $false }
 }
 
 function New-UsageProviderRow {
@@ -4674,7 +5369,7 @@ function New-UsageProviderRow {
     Enable-ControlDoubleBuffering -Control $panel
     $panel.Add_Paint({
         param($eventSource,$eventData)
-        $pen=New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(237,237,240))
+        $pen=New-Object System.Drawing.Pen (Get-OverviewColor "divider")
         try { $eventData.Graphics.DrawLine($pen,0,($eventSource.Height-1),$eventSource.Width,($eventSource.Height-1)) } finally { $pen.Dispose() }
     })
     $icon = New-Object System.Windows.Forms.PictureBox
@@ -4753,6 +5448,13 @@ function Update-UsageProviderRows {
     if ($null -eq $script:UsageProviderRows) { return }
     foreach ($source in @('codex','claude','antigravity','opencodego','qwen')) {
         $row=$script:UsageProviderRows[$source]
+        if ([string]$row.Icon.Tag -ne $script:OverviewTheme) {
+            # Monochrome provider marks need the light disc on a dark surface, as in the pill.
+            $oldImage=$row.Icon.Image
+            $row.Icon.Image=New-BadgeLogoImage -Size 28 -Source $source -DarkSurface:($script:OverviewTheme -eq 'Dark')
+            $row.Icon.Tag=$script:OverviewTheme
+            if ($null -ne $oldImage) { $oldImage.Dispose() }
+        }
         $data=Get-TaskbarBadgeData -Source $source
         $items=@($data.Items|Where-Object {$_.Label -ne 'cache'})
         if ($source -eq 'codex') {
@@ -4798,6 +5500,8 @@ function Update-UsageTabLayout {
             $control.Width = [Math]::Max(100, $Page.ClientSize.Width - 28)
             $bottomSpace = if ($isLive -or $Page.Text -eq 'Details') { 14 } else { 54 }
             $control.Height = [Math]::Max(60, $Page.ClientSize.Height - $control.Top - $bottomSpace)
+            # The last column fills the row so no unthemed header strip remains.
+            if ($control.Columns.Count -gt 0) { $control.Columns[$control.Columns.Count - 1].Width = -2 }
         } elseif ($control.Tag -eq 'provider-rows') {
             $control.Size = New-Object System.Drawing.Size ([Math]::Max(200,$Page.ClientSize.Width - 36)),([Math]::Max(100,$Page.ClientSize.Height - 72))
         } elseif ($control -is [System.Windows.Forms.Button]) {
@@ -4807,6 +5511,263 @@ function Update-UsageTabLayout {
             $control.Width = [Math]::Max(100, $Page.ClientSize.Width - 162)
         }
     }
+}
+
+$script:QuickPanel = $null
+$script:QuickPanelHotspots = @()
+
+function Get-ProviderAttentionText {
+    param([string]$Source, [string]$Code)
+    switch ($Code) {
+        'auth_expired' {
+            if ($Source -eq 'opencodego') { if ([string](Get-OpenCodeGoUsageSnapshot).lastErrorMessage -match '(?i)expired') { return 'API key expired' } return 'API key rejected' }
+            if ($Source -eq 'qwen') { return 'Session expired' }
+            return 'Sign in again'
+        }
+        'api_key_required' { return 'API key required' }
+        'subscription_required' { return 'Subscription required' }
+        'setup_required' { return 'Setup required' }
+        'credential_unreadable' { return 'Saved key unreadable' }
+        'access_denied' { return 'Access denied' }
+        default { return 'Sign-in required' }
+    }
+}
+
+function Get-QuickViewWindowName {
+    param([string]$Label)
+    switch -Regex ($Label) {
+        '^5h$' { return '5-hour' }
+        '^weekly$' { return 'Weekly' }
+        '^monthly$' { return 'Monthly' }
+        default { return $Label }
+    }
+}
+
+function Get-QuickViewModel {
+    $names = @{codex='ChatGPT / Codex';claude='Claude';antigravity='Antigravity';opencodego='OpenCode Go';qwen='Qwen Token Plan'}
+    foreach ($source in @(Get-TaskbarBadgeSources)) {
+        $data = Get-TaskbarBadgeData -Source $source
+        $items = @($data.Items | Where-Object { $_.Label -ne 'cache' })
+        if ($source -eq 'codex') {
+            # The pill shows one Codex window; the quick view shows every window Codex reports.
+            $bucket = Get-MainLiveBucket
+            $codexItems = @(foreach ($window in @(@{Label='5h';Minutes=300},@{Label='weekly';Minutes=10080})) {
+                $value = Get-LiveBucketWindow -Bucket $bucket -Minutes $window.Minutes
+                if ($null -ne $value -and $null -ne $value.remainingPercent) {
+                    [pscustomobject]@{ Label = $window.Label; Text = (Format-RemainingPercent $value.remainingPercent); Color = (Get-PercentColor -Percent $value.remainingPercent); ResetsAt = [string]$value.resetsAt }
+                }
+            })
+            if ($codexItems.Count -gt 0) { $items = $codexItems }
+        }
+        $attentionCode = Get-ProviderAttentionCode -Source $source
+        $status = if ($attentionCode) { Get-ProviderAttentionText -Source $source -Code $attentionCode } else { ((Get-ProviderStatusMessage -Source $source) -replace '^[^-]+ - ', '') }
+        # Short and calm: the time is enough, the panel is about now.
+        $status = $status -replace "\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\s+", ""
+        $windows = @(foreach ($item in $items) {
+            $percent = Get-BadgeItemPercent $item
+            $countdown = if ($null -ne $percent -and -not [bool]$data.Cached) { Format-BadgeResetCountdown ([string]$item.ResetsAt) } else { '' }
+            [pscustomobject]@{
+                Name = Get-QuickViewWindowName ([string]$item.Label)
+                Text = [string]$item.Text
+                Percent = $percent
+                Color = $item.Color
+                Reset = $(if ($countdown) { "resets in $countdown" } else { '' })
+            }
+        })
+        # Show the windows the provider actually reports; a provider without data gets one quiet line.
+        $known = @($windows | Where-Object { $null -ne $_.Percent })
+        [pscustomobject]@{
+            Source = $source
+            Name = $names[$source]
+            Attention = [bool]$attentionCode
+            Status = $status
+            Cached = [bool]$data.Cached
+            Windows = $known
+        }
+    }
+}
+
+function Get-QuickPanelPalette {
+    $dark = $script:BadgeTheme -eq 'Dark'
+    return [pscustomobject]@{
+        Back = $(if ($dark) { [System.Drawing.Color]::FromArgb(32,33,38) } else { [System.Drawing.Color]::FromArgb(249,250,252) })
+        Border = $(if ($dark) { [System.Drawing.Color]::FromArgb(64,66,75) } else { [System.Drawing.Color]::FromArgb(214,218,226) })
+        Ink = $(if ($dark) { [System.Drawing.Color]::FromArgb(236,238,244) } else { [System.Drawing.Color]::FromArgb(30,33,40) })
+        Muted = $(if ($dark) { [System.Drawing.Color]::FromArgb(162,167,180) } else { [System.Drawing.Color]::FromArgb(96,102,116) })
+        Divider = $(if ($dark) { [System.Drawing.Color]::FromArgb(52,54,61) } else { [System.Drawing.Color]::FromArgb(229,231,236) })
+        Track = $(if ($dark) { [System.Drawing.Color]::FromArgb(58,60,68) } else { [System.Drawing.Color]::FromArgb(228,230,236) })
+        Accent = [System.Drawing.Color]::FromArgb(208,34,121)
+        Hover = $(if ($dark) { [System.Drawing.Color]::FromArgb(48,50,57) } else { [System.Drawing.Color]::FromArgb(236,238,243) })
+    }
+}
+
+function Get-QuickPanelSize {
+    param([object[]]$Model)
+    $height = 16 + 32 + 8
+    foreach ($provider in $Model) { $height += 34 + (40 * [Math]::Max(1, @($provider.Windows).Count)) + 12 }
+    $height += 48
+    return New-Object System.Drawing.Size (ConvertTo-BadgePixels 372), (ConvertTo-BadgePixels $height)
+}
+
+function Draw-QuickPanel {
+    param([System.Drawing.Graphics]$Graphics, [System.Drawing.Size]$Size, [object[]]$Model)
+    $p = Get-QuickPanelPalette
+    $s = { param([double]$value) ConvertTo-BadgePixels $value }
+    $Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $Graphics.Clear($p.Back)
+    $borderPen = New-Object System.Drawing.Pen $p.Border
+    $Graphics.DrawRectangle($borderPen, 0, 0, $Size.Width - 1, $Size.Height - 1)
+    $borderPen.Dispose()
+    $title = New-Object System.Drawing.Font 'Segoe UI Semibold', ([float](& $s 15)), ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
+    $nameFont = New-Object System.Drawing.Font 'Segoe UI Semibold', ([float](& $s 13.5)), ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
+    $small = New-Object System.Drawing.Font 'Segoe UI', ([float](& $s 12)), ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
+    $value = New-Object System.Drawing.Font 'Segoe UI Semibold', ([float](& $s 14)), ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
+    $left = [System.Windows.Forms.TextFormatFlags]::Left -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::SingleLine -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis -bor [System.Windows.Forms.TextFormatFlags]::NoPadding
+    $right = [System.Windows.Forms.TextFormatFlags]::Right -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::SingleLine -bor [System.Windows.Forms.TextFormatFlags]::NoPadding
+    $script:QuickPanelHotspots = @()
+    try {
+        $pad = & $s 16
+        $inner = $Size.Width - 2 * $pad
+        $y = & $s 16
+        $icon = Get-UtpAppIcon -Size (& $s 20)
+        if ($null -ne $icon) { $Graphics.DrawIcon($icon, (New-Object System.Drawing.Rectangle $pad, ($y + (& $s 6)), (& $s 20), (& $s 20))); $icon.Dispose() }
+        [System.Windows.Forms.TextRenderer]::DrawText($Graphics, 'Usage', $title, (New-Object System.Drawing.Rectangle ($pad + (& $s 28)), $y, $inner, (& $s 32)), $p.Ink, $left)
+        $y += & $s 40
+        foreach ($provider in $Model) {
+            $divider = New-Object System.Drawing.Pen $p.Divider
+            $Graphics.DrawLine($divider, $pad, $y - (& $s 4), $Size.Width - $pad, $y - (& $s 4))
+            $divider.Dispose()
+            $logo = Get-BadgeSegmentLogo -Source $provider.Source -Size (& $s 20)
+            $Graphics.DrawImage($logo, (New-Object System.Drawing.Rectangle $pad, ($y + (& $s 6)), (& $s 20), (& $s 20)))
+            if ($provider.Attention) { Draw-BadgeAttentionDot -Graphics $Graphics -LogoRect (New-Object System.Drawing.Rectangle $pad, ($y + (& $s 6)), (& $s 20), (& $s 20)) -Surface $p.Back }
+            [System.Windows.Forms.TextRenderer]::DrawText($Graphics, $provider.Name, $nameFont, (New-Object System.Drawing.Rectangle ($pad + (& $s 30)), $y, ($inner - (& $s 150)), (& $s 32)), $p.Ink, $left)
+            $statusColor = if ($provider.Attention) { Get-TaskbarBadgeAttentionColor } else { $p.Muted }
+            $statusRect = New-Object System.Drawing.Rectangle ($Size.Width - $pad - (& $s 170)), $y, (& $s 170), (& $s 32)
+            [System.Windows.Forms.TextRenderer]::DrawText($Graphics, [string]$provider.Status, $small, $statusRect, $statusColor, ($right -bor [System.Windows.Forms.TextFormatFlags]::EndEllipsis))
+            if ($provider.Attention -and $provider.Source -in @('opencodego','qwen','claude')) {
+                $script:QuickPanelHotspots += [pscustomobject]@{ Rect = $statusRect; Action = "setup:$($provider.Source)" }
+            }
+            $y += & $s 34
+            $windows = @($provider.Windows)
+            if ($windows.Count -eq 0) { $windows = @([pscustomobject]@{ Name = 'Usage'; Text = '--'; Percent = $null; Color = $p.Muted; Reset = '' }) }
+            foreach ($window in $windows) {
+                $rowRect = New-Object System.Drawing.Rectangle ($pad + (& $s 30)), $y, ($inner - (& $s 30)), (& $s 22)
+                [System.Windows.Forms.TextRenderer]::DrawText($Graphics, [string]$window.Name, $small, $rowRect, $p.Muted, $left)
+                $valueColor = if ($null -eq $window.Percent -or $provider.Cached -or $null -eq $window.Color) { $p.Muted } else { $window.Color }
+                [System.Windows.Forms.TextRenderer]::DrawText($Graphics, [string]$window.Text, $value, $rowRect, $valueColor, $right)
+                if ($window.Reset) {
+                    $resetRect = New-Object System.Drawing.Rectangle $rowRect.Left, $rowRect.Top, ($rowRect.Width - (& $s 56)), $rowRect.Height
+                    [System.Windows.Forms.TextRenderer]::DrawText($Graphics, [string]$window.Reset, $small, $resetRect, $p.Muted, $right)
+                }
+                # Meter: remaining allowance; empty for unknown values, never invented.
+                $barTop = $y + (& $s 26)
+                $barHeight = [Math]::Max(3, (& $s 4))
+                $trackBrush = New-Object System.Drawing.SolidBrush $p.Track
+                $Graphics.FillRectangle($trackBrush, $rowRect.Left, $barTop, $rowRect.Width, $barHeight)
+                $trackBrush.Dispose()
+                if ($null -ne $window.Percent) {
+                    $fillColor = if ($provider.Cached) { $p.Muted } elseif ($window.Percent -lt 20) { [System.Drawing.Color]::FromArgb(214,48,49) } else { $p.Accent }
+                    $fillBrush = New-Object System.Drawing.SolidBrush $fillColor
+                    $Graphics.FillRectangle($fillBrush, $rowRect.Left, $barTop, [int][Math]::Round($rowRect.Width * [Math]::Min(100, [Math]::Max(0, $window.Percent)) / 100.0), $barHeight)
+                    $fillBrush.Dispose()
+                }
+                $y += & $s 40
+            }
+            $y += & $s 12
+        }
+        # Footer actions.
+        $footerTop = $Size.Height - (& $s 44)
+        $divider = New-Object System.Drawing.Pen $p.Divider
+        $Graphics.DrawLine($divider, 0, $footerTop, $Size.Width, $footerTop)
+        $divider.Dispose()
+        $half = [int]($Size.Width / 2)
+        $refreshRect = New-Object System.Drawing.Rectangle 0, $footerTop, $half, (& $s 44)
+        $overviewRect = New-Object System.Drawing.Rectangle $half, $footerTop, ($Size.Width - $half), (& $s 44)
+        $center = [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::SingleLine
+        $refreshText = if ($script:ProviderRefreshes.Count -gt 0) { 'Refreshing...' } else { 'Refresh now' }
+        [System.Windows.Forms.TextRenderer]::DrawText($Graphics, $refreshText, $nameFont, $refreshRect, $p.Ink, $center)
+        [System.Windows.Forms.TextRenderer]::DrawText($Graphics, 'Open overview', $nameFont, $overviewRect, $p.Accent, $center)
+        $script:QuickPanelHotspots += [pscustomobject]@{ Rect = $refreshRect; Action = 'refresh' }
+        $script:QuickPanelHotspots += [pscustomobject]@{ Rect = $overviewRect; Action = 'overview' }
+    }
+    finally { $title.Dispose(); $nameFont.Dispose(); $small.Dispose(); $value.Dispose() }
+}
+
+function Close-QuickPanel {
+    if ($null -ne $script:QuickPanel -and -not $script:QuickPanel.IsDisposed) {
+        $panel = $script:QuickPanel
+        $script:QuickPanel = $null
+        $panel.Close()
+        $panel.Dispose()
+    }
+}
+
+function Invoke-QuickPanelAction {
+    param([string]$Action)
+    Close-QuickPanel
+    switch -Regex ($Action) {
+        '^refresh$' { Start-AllUsageRefresh }
+        '^overview$' { Show-MainWindow }
+        '^setup:opencodego$' { [void](Show-OpenCodeGoSetupDialog) }
+        '^setup:qwen$' { [void](Show-QwenSetupDialog) }
+        '^setup:claude$' { Show-MainWindow }
+    }
+}
+
+function Get-QuickPanelBounds {
+    param([System.Drawing.Size]$Size)
+    $work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $gap = ConvertTo-BadgePixels 10
+    if ($null -ne $script:BadgeForm -and -not $script:BadgeForm.IsDisposed -and $script:BadgeForm.Visible) {
+        $anchor = $script:BadgeForm.Bounds
+        $x = $anchor.Right - $Size.Width
+        $y = if ($anchor.Top -ge $work.Bottom - 2) { $work.Bottom - $Size.Height - $gap } else { $anchor.Bottom + $gap }
+    }
+    else {
+        $x = $work.Right - $Size.Width - $gap
+        $y = $work.Bottom - $Size.Height - $gap
+    }
+    $x = [Math]::Max($work.Left + $gap, [Math]::Min($x, $work.Right - $Size.Width - $gap))
+    $y = [Math]::Max($work.Top + $gap, [Math]::Min($y, $work.Bottom - $Size.Height))
+    return New-Object System.Drawing.Rectangle $x, $y, $Size.Width, $Size.Height
+}
+
+function Show-QuickPanel {
+    # Toggle: a second middle-click or menu choice closes the open panel.
+    if ($null -ne $script:QuickPanel -and -not $script:QuickPanel.IsDisposed) { Close-QuickPanel; return }
+    $model = @(Get-QuickViewModel)
+    $panel = New-Object UtpFlyoutForm
+    $panel.Text = "Usage Tray Pill quick view"
+    $panel.TopMost = $true
+    $panel.Bounds = Get-QuickPanelBounds -Size (Get-QuickPanelSize -Model $model)
+    $panel.BackColor = (Get-QuickPanelPalette).Back
+    $panel.Tag = $model
+    $panel.AccessibleName = "Usage. " + (@($model | ForEach-Object { "$($_.Name): " + (@($_.Windows | ForEach-Object { "$($_.Name) $($_.Text)" }) -join ', ') + ". $($_.Status)" }) -join ' ')
+    $panel.Add_Paint({ param($eventSource, $eventData) Draw-QuickPanel -Graphics $eventData.Graphics -Size $eventSource.ClientSize -Model @($eventSource.Tag) })
+    $panel.Add_Deactivate({ Close-QuickPanel })
+    $panel.Add_KeyDown({
+        param($eventSource, $eventData)
+        if ($eventData.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { Close-QuickPanel }
+        elseif ($eventData.KeyCode -eq [System.Windows.Forms.Keys]::Enter) { Invoke-QuickPanelAction -Action 'overview' }
+    })
+    $panel.Add_MouseMove({
+        param($eventSource, $eventData)
+        $hit = @($script:QuickPanelHotspots | Where-Object { $_.Rect.Contains($eventData.Location) }).Count -gt 0
+        $eventSource.Cursor = if ($hit) { [System.Windows.Forms.Cursors]::Hand } else { [System.Windows.Forms.Cursors]::Default }
+    })
+    $panel.Add_MouseUp({
+        param($eventSource, $eventData)
+        foreach ($spot in @($script:QuickPanelHotspots)) {
+            if ($spot.Rect.Contains($eventData.Location)) { Invoke-QuickPanelAction -Action $spot.Action; return }
+        }
+    })
+    $panel.Add_HandleCreated({
+        param($eventSource, $eventData)
+        if ('UtpShellIdentity' -as [type]) { [UtpShellIdentity]::SetRoundedCorners($eventSource.Handle) }
+    })
+    $script:QuickPanel = $panel
+    $panel.Show()
+    $panel.Activate()
 }
 
 function Get-TaskbarPreviewStripColor {
@@ -4932,6 +5893,14 @@ function New-PillPreferencesPage {
     $countdownCheck.Add_Click({ param($eventSource,$eventData) Set-TaskbarBadgePreference -Countdown $(if($eventSource.Checked){'on'}else{'off'}) })
     $Page.Controls.Add($countdownCheck)
 
+    $countdownWeeklyCheck = New-Object System.Windows.Forms.CheckBox
+    $countdownWeeklyCheck.Text = 'Also for weekly and monthly limits'
+    $countdownWeeklyCheck.AccessibleName = 'Also count down to weekly and monthly resets'
+    $countdownWeeklyCheck.Location = New-Object System.Drawing.Point 456,282
+    $countdownWeeklyCheck.Size = New-Object System.Drawing.Size 330,24
+    $countdownWeeklyCheck.Add_Click({ param($eventSource,$eventData) Set-TaskbarBadgePreference -CountdownWeekly $(if($eventSource.Checked){'on'}else{'off'}) })
+    $Page.Controls.Add($countdownWeeklyCheck)
+
     $hint = New-Object System.Windows.Forms.Label
     $hint.Text = 'With two providers, click the left or right side of the pill to switch that side. Period labels shorten to 5h, wk and mo so both fit.'
     $hint.Location = New-Object System.Drawing.Point 28,316
@@ -4939,7 +5908,7 @@ function New-PillPreferencesPage {
     $hint.ForeColor = $muted
     $Page.Controls.Add($hint)
 
-    $controls = @{Page=$Page;Strip=$strip;Preview=$preview;Single=$singleRadio;Dual=$dualRadio;Left=$leftBox;Right=$rightBox;Swap=$swapButton;Detail=$detailBox;Countdown=$countdownCheck;Hint=$hint;Intro=$intro}
+    $controls = @{Page=$Page;Strip=$strip;Preview=$preview;Single=$singleRadio;Dual=$dualRadio;Left=$leftBox;Right=$rightBox;Swap=$swapButton;Detail=$detailBox;Countdown=$countdownCheck;CountdownWeekly=$countdownWeeklyCheck;Hint=$hint;Intro=$intro}
     $Page.Tag = $controls
     $Page.Add_Resize({ param($eventSource,$eventData) Update-PillPreferencesLayout -Controls $eventSource.Tag })
     Update-PillPreferencesLayout -Controls $controls
@@ -4987,6 +5956,9 @@ function Update-PillPreferencesPage {
     $pill.Countdown.Enabled = $dual
     $countdownOn = [bool]$script:State.settings.taskbarBadgeResetCountdown
     if ($pill.Countdown.Checked -ne $countdownOn) { $pill.Countdown.Checked = $countdownOn }
+    $pill.CountdownWeekly.Enabled = $dual -and $countdownOn
+    $weeklyOn = [bool]$script:State.settings.taskbarBadgeResetCountdownWeekly
+    if ($pill.CountdownWeekly.Checked -ne $weeklyOn) { $pill.CountdownWeekly.Checked = $weeklyOn }
     $detailIndex = if ([string]$script:State.settings.taskbarBadgeDualDetail -eq 'tightest') { 1 } else { 0 }
     if (-not $pill.Detail.DroppedDown -and $pill.Detail.SelectedIndex -ne $detailIndex) { $pill.Detail.SelectedIndex = $detailIndex }
 
@@ -5023,14 +5995,23 @@ function Show-MainWindow {
     $form.ForeColor = [System.Drawing.Color]::FromArgb(36, 39, 46)
     $form.Font = New-Object System.Drawing.Font "Segoe UI", 9
 
-    if ($null -ne $script:NotifyIcon -and $null -ne $script:NotifyIcon.Icon) {
-        $form.Icon = $script:NotifyIcon.Icon
+    Initialize-UtpForm -Form $form
+
+    $titleIcon = New-Object System.Windows.Forms.PictureBox
+    $titleIcon.Location = New-Object System.Drawing.Point 30, 30
+    $titleIcon.Size = New-Object System.Drawing.Size 40, 40
+    $titleIcon.SizeMode = 'Zoom'
+    $titleIconPath = Join-Path (Get-UtpInstallRoot) "assets\app-icon.png"
+    if (Test-Path -LiteralPath $titleIconPath) {
+        try { $titleIcon.Image = [System.Drawing.Image]::FromFile($titleIconPath) } catch { }
     }
+    $titleIcon.Add_Disposed({ param($eventSource,$eventData) if ($null -ne $eventSource.Image) { $eventSource.Image.Dispose() } })
+    $form.Controls.Add($titleIcon)
 
     $title = New-Object System.Windows.Forms.Label
     $title.Text = "Usage overview"
-    $title.Location = New-Object System.Drawing.Point 30, 28
-    $title.Size = New-Object System.Drawing.Size 680, 45
+    $title.Location = New-Object System.Drawing.Point 80, 28
+    $title.Size = New-Object System.Drawing.Size 630, 45
     $title.Font = New-Object System.Drawing.Font "Segoe UI Semibold", 26
     $form.Controls.Add($title)
 
@@ -5052,7 +6033,8 @@ function Show-MainWindow {
     $planLabel = New-Object System.Windows.Forms.Label
     $planLabel.Text = "Plan name"
     $planLabel.Location = New-Object System.Drawing.Point 14, 12
-    $planLabel.AutoSize = $true
+    # Fixed height: an auto-sized label would cover the top border of the box below it.
+    $planLabel.Size = New-Object System.Drawing.Size 230, 21
     $planLabel.ForeColor = [System.Drawing.Color]::FromArgb(82, 87, 97)
     $settingsPanel.Controls.Add($planLabel)
 
@@ -5161,18 +6143,8 @@ function Show-MainWindow {
         param($eventSource, $eventData)
 
         $isSelected = ($eventData.Index -eq $eventSource.SelectedIndex)
-        $background = if ($isSelected) {
-            [System.Drawing.Color]::White
-        }
-        else {
-            [System.Drawing.Color]::FromArgb(245, 244, 241)
-        }
-        $foreground = if ($isSelected) {
-            [System.Drawing.Color]::FromArgb(36, 39, 46)
-        }
-        else {
-            [System.Drawing.Color]::FromArgb(103, 108, 118)
-        }
+        $background = if ($isSelected) { Get-OverviewColor "surface" } else { Get-OverviewColor "paper" }
+        $foreground = if ($isSelected) { Get-OverviewColor "ink" } else { Get-OverviewColor "muted" }
 
         $backgroundBrush = New-Object System.Drawing.SolidBrush $background
         try {
@@ -5205,8 +6177,10 @@ function Show-MainWindow {
             $foreground,
             $textFlags
         )
-    }.GetNewClosure())
+    })
     $form.Controls.Add($tabs)
+    $tabs.Add_Resize({ param($eventSource,$eventData) Update-TabStripFill -Tabs $eventSource })
+    $tabs.Add_SelectedIndexChanged({ param($eventSource,$eventData) Update-TabStripFill -Tabs $eventSource })
 
     $liveTab = New-Object System.Windows.Forms.TabPage
     $liveTab.Text = "Live usage"
@@ -5434,16 +6408,74 @@ function Show-MainWindow {
         $preferencesTab.Controls.Add($button)
         $utilityY += 46
     }
+
+    $notifyHeading = New-Object System.Windows.Forms.Label
+    $notifyHeading.Text = 'Notifications'
+    $notifyHeading.Font = New-Object System.Drawing.Font 'Segoe UI Semibold', 9.5
+    $notifyHeading.Location = New-Object System.Drawing.Point 300,176
+    $notifyHeading.AutoSize = $true
+    $preferencesTab.Controls.Add($notifyHeading)
+    $notifyLowCheck = New-Object System.Windows.Forms.CheckBox
+    $notifyLowCheck.Text = 'Notify when an allowance drops below'
+    $notifyLowCheck.Location = New-Object System.Drawing.Point 300,200
+    $notifyLowCheck.Size = New-Object System.Drawing.Size 290,24
+    $notifyLowCheck.Checked = [bool]$script:State.settings.notifyLowAllowance
+    $notifyLowCheck.Add_Click({ param($eventSource,$eventData) $script:State.settings.notifyLowAllowance=$eventSource.Checked; Save-State })
+    $preferencesTab.Controls.Add($notifyLowCheck)
+    $notifyThresholdBox = New-Object System.Windows.Forms.ComboBox
+    $notifyThresholdBox.DropDownStyle = 'DropDownList'
+    $notifyThresholdBox.AccessibleName = 'Notification threshold'
+    $notifyThresholdBox.Location = New-Object System.Drawing.Point 594,199
+    $notifyThresholdBox.Size = New-Object System.Drawing.Size 72,25
+    foreach ($percent in 5,10,20,25) { [void]$notifyThresholdBox.Items.Add("$percent%") }
+    $notifyThresholdBox.SelectedItem = "$([int]$script:State.settings.notifyLowThreshold)%"
+    $notifyThresholdBox.Add_SelectionChangeCommitted({ param($eventSource,$eventData) $script:State.settings.notifyLowThreshold=[int]([string]$eventSource.SelectedItem).TrimEnd('%'); Save-State })
+    $preferencesTab.Controls.Add($notifyThresholdBox)
+    $notifyResetCheck = New-Object System.Windows.Forms.CheckBox
+    $notifyResetCheck.Text = 'Notify when a limit resets'
+    $notifyResetCheck.Location = New-Object System.Drawing.Point 300,228
+    $notifyResetCheck.Size = New-Object System.Drawing.Size 330,24
+    $notifyResetCheck.Checked = [bool]$script:State.settings.notifyReset
+    $notifyResetCheck.Add_Click({ param($eventSource,$eventData) $script:State.settings.notifyReset=$eventSource.Checked; Save-State })
+    $preferencesTab.Controls.Add($notifyResetCheck)
+    $notifyTestButton = New-Object System.Windows.Forms.Button
+    $notifyTestButton.Text = 'Send test notification'
+    $notifyTestButton.Location = New-Object System.Drawing.Point 300,258
+    $notifyTestButton.Size = New-Object System.Drawing.Size 190,30
+    Set-MainWindowButtonStyle -Button $notifyTestButton
+    $notifyTestButton.Add_Click({ Send-UtpNotification -Title 'Usage Tray Pill' -Text 'Notifications are on. UTP lets you know when a limit runs low or resets.' })
+    $preferencesTab.Controls.Add($notifyTestButton)
+
+    $updateHeading = New-Object System.Windows.Forms.Label
+    $updateHeading.Text = 'Updates'
+    $updateHeading.Font = New-Object System.Drawing.Font 'Segoe UI Semibold', 9.5
+    $updateHeading.Location = New-Object System.Drawing.Point 300,304
+    $updateHeading.AutoSize = $true
+    $preferencesTab.Controls.Add($updateHeading)
+    $versionLabel = New-Object System.Windows.Forms.Label
+    $versionLabel.Text = "Version $script:AppVersion"
+    $versionLabel.Location = New-Object System.Drawing.Point 300,326
+    $versionLabel.Size = New-Object System.Drawing.Size 200,20
+    $versionLabel.ForeColor = [System.Drawing.Color]::FromArgb(99,104,117)
+    $preferencesTab.Controls.Add($versionLabel)
+    $updateButton = New-Object System.Windows.Forms.Button
+    $updateButton.Text = 'Check for updates'
+    $updateButton.Location = New-Object System.Drawing.Point 300,348
+    $updateButton.Size = New-Object System.Drawing.Size 170,30
+    Set-MainWindowButtonStyle -Button $updateButton
+    $updateButton.Add_Click({ Invoke-UtpUpdateCheck -Interactive })
+    $preferencesTab.Controls.Add($updateButton)
+
     $footer = New-Object System.Windows.Forms.Label
-    $footer.Text = 'Click the pill to switch providers. Right-click for actions.'
+    $footer.Text = 'Click the pill to switch providers. Middle-click for the quick view, right-click for actions.'
     $footer.Location = New-Object System.Drawing.Point 30,720
-    $footer.Size = New-Object System.Drawing.Size 560,24
+    $footer.Size = New-Object System.Drawing.Size 700,24
     $footer.ForeColor = [System.Drawing.Color]::FromArgb(99,104,117)
     $footer.Anchor = 'Bottom,Left'
     $form.Controls.Add($footer)
     $hideButton.Location = New-Object System.Drawing.Point 820,716
     $exitButton.Location = New-Object System.Drawing.Point 920,716
-    $script:MainWindowControls = @{Pill=$pillControls;FullscreenHide=$fullscreenCheck;ClaudeControl=$claudeControlCheck;QwenEnabled=$qwenEnabledCheck;CodexBucket=$codexBucketBox;Rows=$usageRows;Plan=$planBox;Resets=$resetsList;Limits=$limitsList;Live=$liveList;Header=$header;Status=$liveStatusLabel;Refresh=$refreshLiveButton}
+    $script:MainWindowControls = @{Tabs=$tabs;NotifyLow=$notifyLowCheck;NotifyReset=$notifyResetCheck;NotifyThreshold=$notifyThresholdBox;Pill=$pillControls;FullscreenHide=$fullscreenCheck;ClaudeControl=$claudeControlCheck;QwenEnabled=$qwenEnabledCheck;CodexBucket=$codexBucketBox;Rows=$usageRows;Plan=$planBox;Resets=$resetsList;Limits=$limitsList;Live=$liveList;Header=$header;Status=$liveStatusLabel;Refresh=$refreshLiveButton}
     $script:RefreshMainWindow = { Update-MainWindow }
 
 
@@ -5627,10 +6659,22 @@ function New-TrayMenu {
 
     [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
+    $quickItem = New-Object System.Windows.Forms.ToolStripMenuItem
+    $quickItem.Text = "Quick view"
+    $quickItem.ShortcutKeyDisplayString = "Middle-click"
+    $quickItem.Font = New-Object System.Drawing.Font $quickItem.Font, ([System.Drawing.FontStyle]::Bold)
+    $quickItem.Add_Click({ Show-QuickPanel })
+    [void]$menu.Items.Add($quickItem)
+
     $openItem = New-Object System.Windows.Forms.ToolStripMenuItem
     $openItem.Text = "Open usage overview"
     $openItem.Add_Click({ Show-MainWindow })
     [void]$menu.Items.Add($openItem)
+
+    $updateItem = New-Object System.Windows.Forms.ToolStripMenuItem
+    $updateItem.Text = "Check for updates..."
+    $updateItem.Add_Click({ Invoke-UtpUpdateCheck -Interactive })
+    [void]$menu.Items.Add($updateItem)
 
     $refreshItem = New-Object System.Windows.Forms.ToolStripMenuItem "Refresh now"
     $refreshItem.Add_Click({ Start-AllUsageRefresh })
@@ -5969,6 +7013,7 @@ function Start-TrayApp {
         Start-UsageCollection
         Start-UsageMonitoring
 
+    [void](Initialize-UtpProcessIdentity)
     $script:NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
     $script:NotifyIcon.ContextMenuStrip = New-TrayMenu
     $script:NotifyIcon.Visible = $true
@@ -6165,7 +7210,15 @@ function Invoke-SelfTest {
     $lightTraySignatureA = Get-TrayIconRenderSignature -Snapshot $traySignatureSnapshotA -Theme "Light"
     $lightTraySignatureB = Get-TrayIconRenderSignature -Snapshot $traySignatureSnapshotB -Theme "Light"
     Assert-SelfTest ($lightTraySignatureA -eq $lightTraySignatureB) "a static UTP asset must not be resent to the tray on every status check"
-    Assert-SelfTest ($lightTraySignatureA -ne (Get-TrayIconRenderSignature -Snapshot $traySignatureSnapshotA -Theme "Dark")) "a system theme change must activate a new tray icon"
+    if (Test-Path -LiteralPath (Join-Path (Get-UtpInstallRoot) "assets\app-icon.ico")) {
+        # The app icon is designed for both taskbar themes, so a theme change keeps the same tray icon.
+        Assert-SelfTest ($lightTraySignatureA -eq (Get-TrayIconRenderSignature -Snapshot $traySignatureSnapshotA -Theme "Dark")) "the theme-neutral app icon must not be resent on a theme change"
+        $trayIcon = New-TrayIcon -Count 0 -Level "none" -Theme "Light"
+        try { Assert-SelfTest ($trayIcon.Width -ge 16 -and $trayIcon.Width -le 64) "the tray must use an app-icon frame at notification-area size" } finally { $trayIcon.Dispose() }
+    }
+    else {
+        Assert-SelfTest ($lightTraySignatureA -ne (Get-TrayIconRenderSignature -Snapshot $traySignatureSnapshotA -Theme "Dark")) "a system theme change must activate a new tray icon"
+    }
 
     Assert-SelfTest ($null -ne (Get-Command Test-CodexAppProcess -ErrorAction SilentlyContinue)) "the Codex/ChatGPT process helper must exist"
     Assert-SelfTest ($null -ne (Get-Command Resolve-CodexCommandPath -ErrorAction SilentlyContinue)) "the Codex command resolver must exist"

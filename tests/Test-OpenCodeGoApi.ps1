@@ -39,6 +39,34 @@ Assert-ApiError { ConvertTo-OpenCodeGoApiKey 'Bearer fake-key' } 'invalid_auth'
 $protected = Protect-OpenCodeGoSecret 'synthetic-go-api-key'
 $credential = ConvertFrom-OpenCodeGoStoredCredential ([pscustomobject]@{version=2;protectedApiKey=$protected})
 Assert-Api ($credential.apiKey -eq 'synthetic-go-api-key' -and $protected -ne $credential.apiKey) 'DPAPI v2 key round trip failed.'
+# Key source: OPENCODE_GO_API_KEY wins unless the user chose the key saved in UTP. Synthetic keys only.
+$savedVariable = $env:OPENCODE_GO_API_KEY
+$savedCredentialPath = $script:OpenCodeGoCredentialPath
+$credentialFolder = Join-Path ([IO.Path]::GetTempPath()) ('UTP OpenCode key test ' + [guid]::NewGuid().ToString('N'))
+try {
+    [void][IO.Directory]::CreateDirectory($credentialFolder)
+    $script:OpenCodeGoCredentialPath = Join-Path $credentialFolder 'opencode-go-credentials.json'
+    [pscustomobject]@{version=2;protectedApiKey=(Protect-OpenCodeGoSecret 'synthetic-saved-key')} | ConvertTo-Json | Set-Content -LiteralPath $script:OpenCodeGoCredentialPath -Encoding UTF8
+    $env:OPENCODE_GO_API_KEY = 'synthetic-environment-key'
+    $script:State = [pscustomobject]@{settings=[pscustomobject]@{openCodeGoKeySource='auto'}}
+    $active = Get-OpenCodeGoCredentials
+    Assert-Api ($active.source -eq 'environment' -and $active.apiKey -eq 'synthetic-environment-key') 'The Windows variable must win by default.'
+    $environmentRevision = Get-UtpCredentialRevision 'opencodego'
+    $script:State.settings.openCodeGoKeySource = 'saved'
+    $active = Get-OpenCodeGoCredentials
+    Assert-Api ($active.source -eq 'dpapi' -and $active.apiKey -eq 'synthetic-saved-key') 'Choosing the saved key must ignore the Windows variable.'
+    Assert-Api ((Get-UtpCredentialRevision 'opencodego') -ne $environmentRevision) 'Switching keys must change the credential revision so old values are dropped.'
+    $env:OPENCODE_GO_API_KEY = ''
+    $script:State.settings.openCodeGoKeySource = 'auto'
+    Assert-Api ((Get-OpenCodeGoCredentials).source -eq 'dpapi') 'Without the variable the saved key must be used.'
+}
+finally {
+    $env:OPENCODE_GO_API_KEY = $savedVariable
+    $script:OpenCodeGoCredentialPath = $savedCredentialPath
+    $script:State = $null
+    Remove-Item -LiteralPath $credentialFolder -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 function Unprotect-OpenCodeGoSecret { throw 'Legacy credentials must never be decrypted.' }
 Assert-ApiError { ConvertFrom-OpenCodeGoStoredCredential ([pscustomobject]@{version=1;protectedAuthCookie='not-decryptable'}) } 'api_key_required'
 
@@ -53,6 +81,12 @@ $now = [DateTimeOffset]::Parse('2026-01-01T00:00:00Z')
 Assert-Api ((ConvertTo-OpenCodeGoRetryAfterSeconds 'Thu, 01 Jan 2026 00:01:30 GMT' $now) -eq 90) 'HTTP date Retry-After failed.'
 $stream = New-Object IO.MemoryStream (,[Text.Encoding]::UTF8.GetBytes('eight888'))
 try { Assert-ApiError { Read-OpenCodeGoLimitedUtf8Stream $stream -MaximumBytes 7 } 'response_too_large' } finally { $stream.Dispose() }
+
+# 401: an expired key gets its own advice; other rejections ask for a current key. Provider text is never shown.
+$expired = New-OpenCodeGoHttpException -StatusCode 401 -Detail 'API key has expired'
+Assert-Api ($expired.Data['OpenCodeGoCode'] -eq 'auth_expired' -and $expired.Message -match 'has expired') 'An expired key must be named as expired.'
+$rejected = New-OpenCodeGoHttpException -StatusCode 401 -Detail 'Invalid API key: synthetic-detail'
+Assert-Api ($rejected.Message -match 'did not accept' -and $rejected.Message -notmatch 'synthetic-detail') 'Other rejections must ask for a current key without echoing provider text.'
 
 # In-memory snapshot and transport doubles exercise the actual collector without requests or writes.
 $script:snapshot = [pscustomobject]@{lastSuccessAt=(Get-Date).ToString('o');items=$items;credentialRevision=(Get-UtpCredentialRevision 'opencodego')}

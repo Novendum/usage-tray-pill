@@ -42,6 +42,12 @@ if (@(Get-ChildItem -LiteralPath $repoRoot -File | Where-Object Extension -in @(
     throw 'Runtime, management scripts and tests must live in their dedicated directories.'
 }
 
+# The version UTP reports (and the updater compares) must be documented in the changelog.
+$appVersionMatch = [regex]::Match([IO.File]::ReadAllText((Join-Path $sourceRoot 'Start-UsageTrayPill.ps1')), '(?m)^\$script:AppVersion = "([^"]+)"')
+if (-not $appVersionMatch.Success -or [IO.File]::ReadAllText((Join-Path $repoRoot 'CHANGELOG.md')) -notmatch ('(?m)^## \[' + [regex]::Escape($appVersionMatch.Groups[1].Value) + '\]')) {
+    throw 'The runtime version must have a CHANGELOG.md section.'
+}
+
 foreach ($powerShellFile in @(Get-ChildItem -LiteralPath $sourceRoot, $scriptsRoot, $PSScriptRoot -File -Filter "*.ps1")) {
     $tokens = $null
     $parseErrors = $null
@@ -79,8 +85,8 @@ $startupInstaller = Get-Content -LiteralPath $startupInstallerPath -Raw
 if ($startupInstaller -notmatch '\[switch\]\$Force' -or $startupInstaller -notmatch '\$isManaged') {
     throw "Startup installer must protect a same-named shortcut not owned by UTP."
 }
-if ($startupInstaller -notmatch 'tray-icon-light\.ico') {
-    throw "Startup installer must use the light UTP icon by default."
+if ($startupInstaller -notmatch 'Get-UtpShortcutIconPath' -or (Get-Content -LiteralPath (Join-Path $scriptsRoot 'UtpInstallationHelpers.ps1') -Raw) -notmatch 'app-icon\.ico') {
+    throw "Startup installer must use the UTP app icon by default."
 }
 if (-not (Test-Path -LiteralPath $desktopUninstallerPath)) {
     throw "Desktop shortcut uninstaller is missing."
@@ -97,8 +103,9 @@ $startMenuUninstaller = Get-Content -LiteralPath $startMenuUninstallerPath -Raw
 if ($startMenuInstaller -notmatch 'Usage Tray Pill\.lnk' -or
     $startMenuInstaller -notmatch '\[switch\]\$Force' -or
     $startMenuInstaller -notmatch '\$isManaged' -or
-    $startMenuInstaller -notmatch 'tray-icon-') {
-    throw "Start menu installer must correctly manage the name, ownership, and theme icon."
+    $startMenuInstaller -notmatch 'Get-UtpShortcutIconPath' -or
+    $startMenuInstaller -notmatch 'Set-UtpShortcutAppId') {
+    throw "Start menu installer must correctly manage the name, ownership, app icon and taskbar identity."
 }
 if ($startMenuUninstaller -notmatch '\[switch\]\$Force' -or $startMenuUninstaller -notmatch '\$isManaged') {
     throw "Start menu uninstaller must not remove a same-named shortcut not owned by UTP without -Force."
@@ -418,8 +425,8 @@ if ($desktopInstaller -notmatch '\$Theme = "Light"') {
 if ($desktopInstaller -notmatch '\[switch\]\$Force' -or $desktopInstaller -notmatch '\$isManaged') {
     throw "The desktop installer must protect a same-named shortcut that is not managed by UTP."
 }
-if ($desktopInstaller -notmatch 'tray-icon-') {
-    throw "The desktop installer must use UTP's own themed icons."
+if ($desktopInstaller -notmatch 'Get-UtpShortcutIconPath') {
+    throw "The desktop installer must use UTP's own app icon."
 }
 
 function Stop-ProcessTree {
@@ -495,6 +502,7 @@ foreach ($theme in @('Light', 'Dark')) {
         throw 'Relocated runtime must resolve both icon themes from the package assets directory.'
     }
 }
+if ((Get-UtpAppIconPath) -ne (Join-Path $PSScriptRoot 'assets\app-icon.ico')) { throw 'Relocated runtime must resolve the app icon from the package assets directory.' }
 '@
     [IO.File]::WriteAllText($assetProbePath, $assetProbe, (New-Object Text.UTF8Encoding $true))
     & $windowsPowerShellPath -NoProfile -ExecutionPolicy Bypass -File $assetProbePath
@@ -527,7 +535,7 @@ if ($LASTEXITCODE -ne 0 -or ($usageOutput -notcontains "Selftest OK")) {
     throw "Claude usage updater selftest failed."
 }
 
-foreach ($regressionScript in @('Test-UtpClaudeCache.ps1', 'Test-UtpVisibility.ps1', 'Test-UtpReliability.ps1', 'Test-UtpInteractions.ps1', 'Test-UtpPillRendering.ps1', 'Test-UtpDualPill.ps1', 'Test-OpenCodeGoApi.ps1', 'Test-ExternalUsageAdapters.ps1', 'Test-UtpCollector.ps1', 'Test-UtpRefreshRecovery.ps1', 'Test-UtpPresentationRecovery.ps1', 'Test-UtpProviderRecovery.ps1', 'Test-UtpProcessOwnership.ps1', 'Test-UtpAgyUpdater.ps1', 'Test-UtpInstallationLayout.ps1', 'Test-UtpReleasePackage.ps1')) {
+foreach ($regressionScript in @('Test-UtpClaudeCache.ps1', 'Test-UtpVisibility.ps1', 'Test-UtpReliability.ps1', 'Test-UtpInteractions.ps1', 'Test-UtpPillRendering.ps1', 'Test-UtpDualPill.ps1', 'Test-OpenCodeGoApi.ps1', 'Test-ExternalUsageAdapters.ps1', 'Test-UtpCollector.ps1', 'Test-UtpRefreshRecovery.ps1', 'Test-UtpPresentationRecovery.ps1', 'Test-UtpProviderRecovery.ps1', 'Test-UtpProcessOwnership.ps1', 'Test-UtpAgyUpdater.ps1', 'Test-UtpInstallationLayout.ps1', 'Test-UtpUpdater.ps1', 'Test-UtpNotifications.ps1', 'Test-UtpQuickPanel.ps1', 'Test-UtpTheme.ps1', 'Test-UtpReleasePackage.ps1')) {
     & $windowsPowerShellPath -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $regressionScript)
     if ($LASTEXITCODE -ne 0) { throw "$regressionScript failed." }
 }

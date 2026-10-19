@@ -6,11 +6,18 @@ function Get-ProviderRetrySeconds {
     return [int][Math]::Min(900,30*[Math]::Pow(2,[Math]::Min(5,[Math]::Max(0,$FailureCount-1))))
 }
 
+function Test-UtpOpenCodeEnvironmentKeyActive {
+    # OPENCODE_GO_API_KEY wins unless the user chose the key saved in UTP.
+    if ([string]::IsNullOrWhiteSpace([string]$env:OPENCODE_GO_API_KEY)) { return $false }
+    if ($null -ne $script:State -and [string]$script:State.settings.openCodeGoKeySource -eq 'saved') { return $false }
+    return $true
+}
+
 function Get-UtpCredentialRevision {
     param([string]$Source)
     $path='';$value=''
     switch($Source){
-        'opencodego' {$path=$script:OpenCodeGoCredentialPath;$value=[string]$env:OPENCODE_GO_API_KEY}
+        'opencodego' {$path=$script:OpenCodeGoCredentialPath;$value=if(Test-UtpOpenCodeEnvironmentKeyActive){[string]$env:OPENCODE_GO_API_KEY}else{''}}
         'qwen' {$path=$script:QwenCredentialPath;$value=[string]$env:QWEN_TOKEN_PLAN_COOKIE}
         default {return ''}
     }

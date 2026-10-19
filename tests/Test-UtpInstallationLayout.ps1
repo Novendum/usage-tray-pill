@@ -51,9 +51,11 @@ try {
         [IO.File]::WriteAllText((Join-Path $scriptsFolder $file.Name), $text, $encoding)
     }
     # Installers validate presence; no runtime script or VBS is ever launched.
-    foreach ($file in @('src\Launch-UsageTrayPill.vbs', 'src\Update-ClaudeUsageFromStatusline.ps1', 'assets\tray-icon-light.ico', 'assets\tray-icon-dark.ico')) {
+    foreach ($file in @('src\Launch-UsageTrayPill.vbs', 'src\Update-ClaudeUsageFromStatusline.ps1', 'assets\tray-icon-light.ico', 'assets\tray-icon-dark.ico', 'assets\app-icon.ico')) {
         [IO.File]::WriteAllText((Join-Path $fixtureRoot $file), '', $encoding)
     }
+    # The Start-menu installer stamps UTP's app ID with the real helper type.
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'src\UtpShellIdentity.cs') -Destination (Join-Path $fixtureRoot 'src')
     . (Join-Path $scriptsFolder 'UtpInstallationHelpers.ps1')
     $installation = Get-UtpInstallationPaths
     Check ($installation.Root -eq $fixtureRoot) 'Installation root must be the parent of scripts'
@@ -76,7 +78,10 @@ try {
             Check ($shortcut.WindowStyle -eq 7) 'Shortcut must retain its hidden-launch window style'
             Check ($shortcut.Arguments -eq "`"$($installation.Launcher)`"") "$installName must migrate same-root shortcuts without Force"
             Check ($shortcut.WorkingDirectory -eq $fixtureRoot) 'Shortcut working directory must remain at repository root'
-            Check ($shortcut.IconLocation -eq "$(Join-Path $fixtureRoot 'assets\tray-icon-light.ico'),0") 'Shortcut icon must remain in root assets'
+            Check ($shortcut.IconLocation -eq "$(Join-Path $fixtureRoot 'assets\app-icon.ico'),0") 'Shortcuts must use the UTP app icon from root assets'
+            if ($kind.Folder -eq 'Programs') {
+                Check ([UtpShellIdentity]::GetShortcutAppId($shortcutPath) -eq 'Novendum.UsageTrayPill') 'The Start-menu shortcut must carry the UTP app ID for taskbar grouping and notifications'
+            }
             Write-FixtureShortcut $shortcutPath $installation.Wscript "`"$launcher`""
             Invoke-FixtureScript $uninstallName
             Check (-not (Test-Path -LiteralPath $shortcutPath)) "$uninstallName must remove either same-root layout"
