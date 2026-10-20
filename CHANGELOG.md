@@ -4,6 +4,12 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.10] - 2026-10-20
+
+### Fixed
+
+- The experimental Claude CLI source finds the Claude Code that current Claude Desktop builds keep in `%LOCALAPPDATA%\Claude-Data`. Without it, UTP fell back to an older `claude.exe` on PATH and showed **CLI sign-in / setup required**.
+
 ## [0.1.0-rc.9] - 2026-10-20
 
 ### Changed

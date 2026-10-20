@@ -62,6 +62,25 @@ Assert-ExternalRejected { ConvertFrom-UtpClaudeControlUsageJson -Json ($claudeFi
 Assert-ExternalRejected { ConvertFrom-UtpClaudeControlUsageJson -Json ($claudeFixture.Replace('"behaviors":null','"behaviors":{}')) } 'Unexpected transcript scan output must be rejected.'
 Assert-ExternalRejected { ConvertFrom-UtpClaudeControlUsageJson -Json ($claudeFixture.Replace('"total_cost_usd":0','"total_cost_usd":0.001')) } 'Unexpected Claude session costs must be rejected.'
 
+# Discovery: the newest Claude Code that Claude Desktop keeps, in each of its known layouts.
+$savedAppData=$env:APPDATA;$savedLocalAppData=$env:LOCALAPPDATA
+$cliFixture=Join-Path ([IO.Path]::GetTempPath()) ('UTP Claude CLI fixture '+[guid]::NewGuid().ToString('N'))
+try {
+    $env:APPDATA=Join-Path $cliFixture 'Roaming';$env:LOCALAPPDATA=Join-Path $cliFixture 'Local'
+    function New-FixtureCli { param([string]$Path) [void](New-Item -ItemType Directory -Path (Split-Path $Path) -Force); [IO.File]::WriteAllText($Path,''); return $Path }
+    [void](New-FixtureCli (Join-Path $env:APPDATA 'Claude\claude-code\2.1.250\claude.exe'))
+    $packaged=New-FixtureCli (Join-Path $env:LOCALAPPDATA 'Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude-code\2.1.290\claude.exe')
+    Assert-ExternalTest ((Resolve-UtpClaudeUsageCli) -eq $packaged) 'The newest Claude Desktop CLI must win across layouts.'
+    $current=New-FixtureCli (Join-Path $env:LOCALAPPDATA 'Claude-Data\claude_pzs8sxrjxfjjc\claude-code\2.1.304\aed62990b91e\claude.exe')
+    [void](New-Item -ItemType Directory -Path (Join-Path $env:LOCALAPPDATA 'Claude-Data\claude_pzs8sxrjxfjjc\claude-code\not-a-version') -Force)
+    Assert-ExternalTest ((Resolve-UtpClaudeUsageCli) -eq $current) 'Claude Code in Claude-Data, inside its build folder, must be found.'
+    Remove-Item -LiteralPath (Join-Path $env:APPDATA 'Claude'),(Join-Path $env:LOCALAPPDATA 'Packages') -Recurse -Force
+    Assert-ExternalTest ((Resolve-UtpClaudeUsageCli) -eq $current) 'The Claude-Data layout alone must be enough.'
+} finally {
+    $env:APPDATA=$savedAppData;$env:LOCALAPPDATA=$savedLocalAppData
+    Remove-Item -LiteralPath $cliFixture -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # A malformed Claude quota response can recover; unsafe activity must stay paused.
 $originalClaudeResolver=${function:Resolve-UtpClaudeUsageCli}
 $originalCommandRunner=${function:Invoke-UtpExternalUsageCommand}

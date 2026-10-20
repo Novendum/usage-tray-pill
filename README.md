@@ -30,9 +30,9 @@ A small Windows utility for checking remaining **Codex, Claude, Antigravity, Ope
 - **A new icon and clear status.** UTP gets its own icon and taskbar group, and a red dot on any provider that needs a new key or sign-in.
 - **More countdowns.** Weekly and monthly limits can count down in days, next to the 5-hour clock.
 
-Coming from rc.7? It all arrives at once. From rc.8, **Check for updates** brings you rc.9 in one click.
+Coming from rc.7? It all arrives at once. From rc.8, **Check for updates** brings you the newest version in one click. rc.10 also finds Claude Code in its new Claude Desktop folder.
 
-[Download v0.1.0-rc.9](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.9) · [Read the changes](CHANGELOG.md#010-rc9---2026-10-20)
+[Download v0.1.0-rc.10](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.10) · [Read the changes](CHANGELOG.md#010-rc10---2026-10-20)
 
 ## At home in your taskbar
 

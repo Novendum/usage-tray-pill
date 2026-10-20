@@ -230,6 +230,10 @@ function Resolve-UtpClaudeUsageCli {
     foreach ($package in @(Get-ChildItem -LiteralPath $packages -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue)) {
         $roots += Join-Path $package.FullName 'LocalCache\Roaming\Claude\claude-code'
     }
+    # Current Claude Desktop builds keep Claude Code in %LOCALAPPDATA%\Claude-Data\claude_<publisher>\claude-code.
+    foreach ($data in @(Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'Claude-Data') -Directory -Filter 'claude_*' -ErrorAction SilentlyContinue)) {
+        $roots += Join-Path $data.FullName 'claude-code'
+    }
     $candidates = @()
     foreach ($root in $roots) {
         foreach ($directory in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)) {

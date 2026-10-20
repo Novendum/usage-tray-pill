@@ -20,7 +20,7 @@ The supported source is the Claude Code statusline JSON. Install the UTP statusl
 
 Claude documents 5-hour and 7-day usage fields in its statusline. UTP may also read Claude Desktop's local usage history as a fallback.
 
-Preferences also offers **Use Claude CLI quotas (experimental)**. This remains off by default. It uses an isolated, zero-user-message `get_usage` control request with transcript-behavior scanning disabled. Sign in to Claude Code with your subscription first. The selected source uses its own cache and does not silently fall back. Local validation on 2026-10-02 confirmed quota reads with Claude Code 2.1.286 after sign-in, with no model activity; the upstream API remains experimental.
+Preferences also offers **Use Claude CLI quotas (experimental)**. This remains off by default. It uses an isolated, zero-user-message `get_usage` control request with transcript-behavior scanning disabled. Sign in to Claude Code with your subscription first. UTP uses the newest Claude Code that Claude Desktop installs, otherwise `claude.exe` on PATH; it must be version 2.1.286 or newer. The selected source uses its own cache and does not silently fall back. Local validation on 2026-10-02 confirmed quota reads with Claude Code 2.1.286 after sign-in, with no model activity; the upstream API remains experimental.
 
 The CLI quota source starts its own isolated helper and does not require Claude Desktop to remain open. Successful reads refresh every three minutes. Claude can report account eligibility while returning no quota data; UTP treats this as a temporary fetch failure and waits at least five minutes before retrying, with backoff capped at 15 minutes. Other transient failures start with a 30-second retry.
 

@@ -146,7 +146,7 @@ if (-not ($RefreshLiveOnce -or $RefreshAntigravityOnce -or $RefreshOpenCodeGoOnc
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:AppName = "Usage Tray Pill"
-$script:AppVersion = "0.1.0-rc.9"
+$script:AppVersion = "0.1.0-rc.10"
 $script:DataDir = Join-Path $env:APPDATA "UsageTrayPill"
 $script:DataPath = Join-Path $script:DataDir "data.json"
 $script:CodexUsagePath = Join-Path $script:DataDir "codex-usage.json"
