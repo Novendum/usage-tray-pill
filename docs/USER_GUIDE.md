@@ -6,7 +6,7 @@ Your AI usage, one glance away.
 
 1. Extract the **whole ZIP** to a folder you want to keep.
 2. Review the scripts, then double-click **Start-UsageTrayPill.cmd**.
-3. Click the pill to switch providers. Middle-click it for the **quick view**: every limit, when it resets and what needs your attention. Right-click it to open the overview, settings or Exit.
+3. Click the pill to switch providers. Right-click it for the **quick view**: every limit, when it resets and what needs your attention. The **⋯** button in the quick view opens the menu with the overview, settings and Exit; Shift+right-click on the pill opens that menu directly.
 4. Optional: show two providers at once, such as ChatGPT and Claude, in the overview's **Pill** tab. Then click the left or right side of the pill to switch that side. Turn on **Show time until the 5-hour limit resets** to see a small clock with the remaining time, such as `2h10m`, and **Also for weekly and monthly limits** to count those down in days, such as `3d`.
 
 Requires Windows 11 and Windows PowerShell 5.1. No administrator rights are needed. The pill follows the taskbar theme and hides during fullscreen by default.

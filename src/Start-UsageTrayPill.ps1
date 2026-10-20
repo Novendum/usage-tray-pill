@@ -146,7 +146,7 @@ if (-not ($RefreshLiveOnce -or $RefreshAntigravityOnce -or $RefreshOpenCodeGoOnc
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:AppName = "Usage Tray Pill"
-$script:AppVersion = "0.1.0-rc.8"
+$script:AppVersion = "0.1.0-rc.9"
 $script:DataDir = Join-Path $env:APPDATA "UsageTrayPill"
 $script:DataPath = Join-Path $script:DataDir "data.json"
 $script:CodexUsagePath = Join-Path $script:DataDir "codex-usage.json"
@@ -3512,16 +3512,45 @@ function Toggle-TaskbarBadgeDefaultSource {
     Start-BadgeSlideToSource -Source $next
 }
 
+function Test-UtpMenuModifier {
+    return (([System.Windows.Forms.Control]::ModifierKeys -band [System.Windows.Forms.Keys]::Shift) -ne 0)
+}
+
+function Show-UtpMenu {
+    param([System.Drawing.Point]$At = [System.Windows.Forms.Control]::MousePosition)
+    if ($null -ne $script:NotifyIcon -and $null -ne $script:NotifyIcon.ContextMenuStrip) {
+        $script:NotifyIcon.ContextMenuStrip.Show($At)
+    }
+}
+
+function Invoke-UtpDeferred {
+    param([scriptblock]$Action)
+    # Runs on the UI thread once the current event has finished, for actions that close the
+    # window whose event is still being handled.
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 1
+    $timer.Tag = $Action
+    $timer.Add_Tick({
+        param($eventSource, $eventData)
+        $eventSource.Stop()
+        $work = $eventSource.Tag
+        $eventSource.Dispose()
+        & $work
+    })
+    $timer.Start()
+}
+
 function Invoke-TaskbarBadgeMouseUp {
     param([Parameter(Mandatory = $true)] [System.Windows.Forms.MouseEventArgs]$EventArgs)
 
-    if ($EventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Right) {
-        if ($null -ne $script:NotifyIcon -and $null -ne $script:NotifyIcon.ContextMenuStrip) {
-            $script:NotifyIcon.ContextMenuStrip.Show([System.Windows.Forms.Control]::MousePosition)
+    if ($EventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Right -or $EventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Middle) {
+        # Right-click (or middle-click) opens the quick view; its ... button opens the menu.
+        # Shift+right-click opens the menu directly, as the tray icon does.
+        if ($EventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Right -and (Test-UtpMenuModifier)) {
+            Close-QuickPanel
+            Show-UtpMenu
+            return
         }
-        return
-    }
-    if ($EventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Middle) {
         Show-QuickPanel
         return
     }
@@ -5632,6 +5661,19 @@ function Draw-QuickPanel {
         $icon = Get-UtpAppIcon -Size (& $s 20)
         if ($null -ne $icon) { $Graphics.DrawIcon($icon, (New-Object System.Drawing.Rectangle $pad, ($y + (& $s 6)), (& $s 20), (& $s 20))); $icon.Dispose() }
         [System.Windows.Forms.TextRenderer]::DrawText($Graphics, 'Usage', $title, (New-Object System.Drawing.Rectangle ($pad + (& $s 28)), $y, $inner, (& $s 32)), $p.Ink, $left)
+        # "More": the full UTP menu (setup, updates, resets, Exit).
+        $moreRect = New-Object System.Drawing.Rectangle ($Size.Width - $pad - (& $s 30)), ($y + (& $s 2)), (& $s 36), (& $s 28)
+        $dotBrush = New-Object System.Drawing.SolidBrush $p.Muted
+        try {
+            $dot = [float](& $s 4)
+            $centerY = [float]($moreRect.Top + $moreRect.Height / 2.0)
+            foreach ($offset in @(-7, 0, 7)) {
+                $centerX = [float]($moreRect.Left + $moreRect.Width / 2.0 + (& $s $offset))
+                $Graphics.FillEllipse($dotBrush, $centerX - $dot / 2, $centerY - $dot / 2, $dot, $dot)
+            }
+        }
+        finally { $dotBrush.Dispose() }
+        $script:QuickPanelHotspots += [pscustomobject]@{ Rect = $moreRect; Action = 'menu' }
         $y += & $s 40
         foreach ($provider in $Model) {
             $divider = New-Object System.Drawing.Pen $p.Divider
@@ -5711,6 +5753,7 @@ function Invoke-QuickPanelAction {
         '^setup:opencodego$' { [void](Show-OpenCodeGoSetupDialog) }
         '^setup:qwen$' { [void](Show-QwenSetupDialog) }
         '^setup:claude$' { Show-MainWindow }
+        '^menu$' { Show-UtpMenu }
     }
 }
 
@@ -5733,7 +5776,7 @@ function Get-QuickPanelBounds {
 }
 
 function Show-QuickPanel {
-    # Toggle: a second middle-click or menu choice closes the open panel.
+    # Toggle: a second right-click on the pill or menu choice closes the open panel.
     if ($null -ne $script:QuickPanel -and -not $script:QuickPanel.IsDisposed) { Close-QuickPanel; return }
     $model = @(Get-QuickViewModel)
     $panel = New-Object UtpFlyoutForm
@@ -5744,11 +5787,17 @@ function Show-QuickPanel {
     $panel.Tag = $model
     $panel.AccessibleName = "Usage. " + (@($model | ForEach-Object { "$($_.Name): " + (@($_.Windows | ForEach-Object { "$($_.Name) $($_.Text)" }) -join ', ') + ". $($_.Status)" }) -join ' ')
     $panel.Add_Paint({ param($eventSource, $eventData) Draw-QuickPanel -Graphics $eventData.Graphics -Size $eventSource.ClientSize -Model @($eventSource.Tag) })
-    $panel.Add_Deactivate({ Close-QuickPanel })
+    # The panel closes itself on an outside click or Esc (see UtpFlyoutForm), not on focus loss.
+    if ($null -ne $script:BadgeForm -and -not $script:BadgeForm.IsDisposed -and $script:BadgeForm.Visible) { $panel.ToggleBounds = $script:BadgeForm.Bounds }
+    $panel.Add_FormClosed({
+        param($eventSource, $eventData)
+        if ([object]::ReferenceEquals($script:QuickPanel, $eventSource)) { $script:QuickPanel = $null }
+    })
+    # Actions close this panel, so they run after the key or click event has finished.
     $panel.Add_KeyDown({
         param($eventSource, $eventData)
-        if ($eventData.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { Close-QuickPanel }
-        elseif ($eventData.KeyCode -eq [System.Windows.Forms.Keys]::Enter) { Invoke-QuickPanelAction -Action 'overview' }
+        if ($eventData.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { Invoke-UtpDeferred -Action { Close-QuickPanel } }
+        elseif ($eventData.KeyCode -eq [System.Windows.Forms.Keys]::Enter) { Invoke-UtpDeferred -Action { Invoke-QuickPanelAction -Action 'overview' } }
     })
     $panel.Add_MouseMove({
         param($eventSource, $eventData)
@@ -5758,7 +5807,11 @@ function Show-QuickPanel {
     $panel.Add_MouseUp({
         param($eventSource, $eventData)
         foreach ($spot in @($script:QuickPanelHotspots)) {
-            if ($spot.Rect.Contains($eventData.Location)) { Invoke-QuickPanelAction -Action $spot.Action; return }
+            if ($spot.Rect.Contains($eventData.Location)) {
+                $script:QuickPanelPendingAction = [string]$spot.Action
+                Invoke-UtpDeferred -Action { Invoke-QuickPanelAction -Action $script:QuickPanelPendingAction }
+                return
+            }
         }
     })
     $panel.Add_HandleCreated({
@@ -6467,7 +6520,7 @@ function Show-MainWindow {
     $preferencesTab.Controls.Add($updateButton)
 
     $footer = New-Object System.Windows.Forms.Label
-    $footer.Text = 'Click the pill to switch providers. Middle-click for the quick view, right-click for actions.'
+    $footer.Text = 'Click the pill to switch providers. Right-click it for the quick view and the menu.'
     $footer.Location = New-Object System.Drawing.Point 30,720
     $footer.Size = New-Object System.Drawing.Size 700,24
     $footer.ForeColor = [System.Drawing.Color]::FromArgb(99,104,117)
@@ -6661,7 +6714,7 @@ function New-TrayMenu {
 
     $quickItem = New-Object System.Windows.Forms.ToolStripMenuItem
     $quickItem.Text = "Quick view"
-    $quickItem.ShortcutKeyDisplayString = "Middle-click"
+    $quickItem.ShortcutKeyDisplayString = "Right-click"
     $quickItem.Font = New-Object System.Drawing.Font $quickItem.Font, ([System.Drawing.FontStyle]::Bold)
     $quickItem.Add_Click({ Show-QuickPanel })
     [void]$menu.Items.Add($quickItem)

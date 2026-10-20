@@ -259,7 +259,7 @@ if ($trayScript -notmatch '\$badgeKeepAliveTimer\.Interval\s*=\s*500') {
 if ($trayScript -notmatch 'Invoke-TaskbarBadgeMouseUp -EventArgs \$eventData' -or
     $trayScript -notmatch 'MouseButtons\]::Right' -or
     $trayScript -notmatch 'ContextMenuStrip\.Show') {
-    throw "The pill must switch providers on left-click and open the stable UTP menu on right-click."
+    throw "The pill must switch providers on left-click, open the quick view on right-click and keep the UTP menu reachable."
 }
 if ($trayScript -match '\.FileName = "cmd\.exe"|/c codex app-server') {
     throw "Codex must not be launched through an unresolved cmd or PATH command."
