@@ -18,17 +18,19 @@ A small Windows utility for checking remaining **Codex, Claude, Antigravity, Ope
 
 **[Quick start](#quick-start)** · **[Provider setup](docs/PROVIDERS.md)** · **[What's changed](CHANGELOG.md)** · **[Report a bug](https://github.com/Novendum/usage-tray-pill/issues)**
 
-## What's new in rc.8
+## What's new in rc.9
 
-**Everything at a glance, and a heads-up when it matters.** Right-click the pill for the new **quick view**: every limit, when it resets, and which provider needs you. Its **⋯** button opens the full menu. Turn on notifications for a low allowance or a reset, and update UTP from inside the app with **Check for updates**. UTP also gets a new icon, an overview that follows Windows dark mode, and a red dot on any provider that needs a new key or sign-in.
+![Usage Tray Pill rc.9: right-click the pill and the quick view opens above it with every allowance, its reset time and a provider that needs a new key. Real UTP rendering with illustrative values](docs/media/utp-rc9-update.png)
 
-![Quick view in light and dark, showing illustrative ChatGPT, Claude and OpenCode Go values](docs/media/utp-quick-view.png)
+**Every limit, one right-click away.** Right-click the pill for the new **quick view**: every allowance window, when it resets and which provider needs you. Its **⋯** button opens the full menu.
 
-Earlier: rc.7 added a **reset countdown** to the two-provider pill, and rc.6 added **two providers side by side**.
+- **Alerts when it matters.** Optional Windows notifications when an allowance drops below 5, 10, 20 or 25%, and when a limit resets.
+- **One-click updates.** **Check for updates** downloads a newer release from GitHub, verifies its checksum, keeps your current version as a backup and restarts. Only when you click it.
+- **Dark mode.** The overview and its dialogs follow the Windows app mode, title bar included.
+- **A new icon and clear status.** UTP gets its own icon and taskbar group, and a red dot on any provider that needs a new key or sign-in.
+- **More countdowns.** Weekly and monthly limits can count down in days, next to the 5-hour clock.
 
-![Two-provider pill with a reset countdown in light and dark taskbars, showing illustrative values](docs/media/utp-reset-countdown.png)
-
-rc.9 opens the quick view with a right-click and keeps it open until you click elsewhere.
+Coming from rc.7? It all arrives at once. From rc.8, **Check for updates** brings you rc.9 in one click.
 
 [Download v0.1.0-rc.9](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.9) · [Read the changes](CHANGELOG.md#010-rc9---2026-10-20)
 
@@ -37,7 +39,7 @@ rc.9 opens the quick view with a right-click and keeps it open until you click e
 ![Actual UTP pills in light and dark themes, showing illustrative Codex and Claude allowances](docs/media/utp-pill-themes.png)
 
 - **A clear glance.** Bold text, smooth rounded edges and crisp icons. The pill follows your Windows taskbar's light or dark theme.
-- **Two at a glance.** Show two providers side by side, such as ChatGPT and Claude. Set it up in the **Pill** tab of the overview, or right-click > **Show two providers**.
+- **Two at a glance.** Show two providers side by side, such as ChatGPT and Claude. Set it up in the **Pill** tab of the overview, or choose **Show two providers** in the menu (**⋯** in the quick view).
 - **A quiet interaction.** Click to cycle providers, right-click for the quick view and the menu. No hover popup. Transitions respect Windows animation preferences.
 - **A heads-up when it matters.** Optional notifications when an allowance runs low or a limit resets, and a red dot when a provider needs a new key or sign-in.
 - **Predictable visibility.** The pill hides when a full-screen app covers the primary taskbar and returns when the taskbar is exposed. You can disable full-screen hiding in Preferences.
@@ -52,7 +54,9 @@ rc.9 opens the quick view with a right-click and keeps it open until you click e
   <img src="docs/media/utp-overview-dark.png" width="49%" alt="The same overview in Windows dark mode">
 </p>
 
-The overview brings available allowance windows together, with separate Details, Pill and Preferences tabs, and follows the Windows light or dark app mode. These images use **fictitious values** rendered by the actual app; setup-required and paused providers are shown deliberately. The cover is generated product artwork with illustrative values, not a pixel-exact screenshot.
+![The quick view in light and dark, with illustrative ChatGPT, Claude and OpenCode Go values](docs/media/utp-quick-view.png)
+
+The overview brings available allowance windows together, with separate Details, Pill and Preferences tabs, and follows the Windows light or dark app mode. The quick view puts the same numbers one right-click away. These images use **fictitious values** rendered by the actual app; setup-required and paused providers are shown deliberately. The cover is generated product artwork with illustrative values, not a pixel-exact screenshot.
 
 ## Quick start
 
