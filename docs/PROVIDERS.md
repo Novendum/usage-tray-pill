@@ -34,7 +34,7 @@ UTP sets `AGY_CLI_DISABLE_AUTO_UPDATE=true` only for its Antigravity CLI version
 
 ### OpenCode Go
 
-OpenCode Go is disabled by default. Open the tray menu and choose **Set up OpenCode Go**, then supply your Go API key. Treat this as a secret: the same key can authorize model usage.
+OpenCode Go is disabled by default. Open the menu (right-click the tray icon, or **⋯** in the quick view) and choose **Set up OpenCode Go**, then supply your Go API key. Treat this as a secret: the same key can authorize model usage.
 
 UTP stores the supplied key with current-user Windows DPAPI in its version-2 credential format. It never discovers keys in OpenCode's `auth.json` or browser storage. Every refresh is a direct authenticated GET request to the [official usage endpoint](https://github.com/anomalyco/opencode/blob/dev/packages/console/app/src/routes/zen/go/v1/usage.ts):
 
@@ -50,7 +50,7 @@ Changing the saved key or active environment key invalidates quotas from the pre
 
 ### Qwen Token Plan
 
-Qwen is disabled by default. Open the tray menu and choose **Set up Qwen Token Plan**. In the QwenCloud dashboard, open DevTools, refresh the subscription page, select the `tool/user/info.json` request, and copy only the value of **Request Headers > Cookie** into UTP's local setup dialog. Never paste this value into a bug report or chat.
+Qwen is disabled by default. Open the menu (right-click the tray icon, or **⋯** in the quick view) and choose **Set up Qwen Token Plan**. In the QwenCloud dashboard, open DevTools, refresh the subscription page, select the `tool/user/info.json` request, and copy only the value of **Request Headers > Cookie** into UTP's local setup dialog. Never paste this value into a bug report or chat.
 
 UTP encrypts the session header with Windows DPAPI for the current Windows user. It does not read Qwen CLI settings, inference keys, or browser cookie databases. This adapter uses the dashboard session, not the inference API key. The separate QwenCloud CLI has not been validated as a replacement for this Personal-plan contract.
 
