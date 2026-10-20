@@ -20,7 +20,7 @@ A small Windows utility for checking remaining **Codex, Claude, Antigravity, Ope
 
 ## What's new in rc.8
 
-**Everything at a glance, and a heads-up when it matters.** Middle-click the pill for the new **quick view**: every limit, when it resets, and which provider needs you. Turn on notifications for a low allowance or a reset, and update UTP from inside the app with **Check for updates**. UTP also gets a new icon, an overview that follows Windows dark mode, and a red dot on any provider that needs a new key or sign-in.
+**Everything at a glance, and a heads-up when it matters.** Right-click the pill for the new **quick view**: every limit, when it resets, and which provider needs you. Its **⋯** button opens the full menu. Turn on notifications for a low allowance or a reset, and update UTP from inside the app with **Check for updates**. UTP also gets a new icon, an overview that follows Windows dark mode, and a red dot on any provider that needs a new key or sign-in.
 
 ![Quick view in light and dark, showing illustrative ChatGPT, Claude and OpenCode Go values](docs/media/utp-quick-view.png)
 
@@ -28,7 +28,9 @@ Earlier: rc.7 added a **reset countdown** to the two-provider pill, and rc.6 add
 
 ![Two-provider pill with a reset countdown in light and dark taskbars, showing illustrative values](docs/media/utp-reset-countdown.png)
 
-[Download v0.1.0-rc.8](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.8) · [Read the changes](CHANGELOG.md#010-rc8---2026-10-20)
+rc.9 opens the quick view with a right-click and keeps it open until you click elsewhere.
+
+[Download v0.1.0-rc.9](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.9) · [Read the changes](CHANGELOG.md#010-rc9---2026-10-20)
 
 ## At home in your taskbar
 
@@ -36,7 +38,7 @@ Earlier: rc.7 added a **reset countdown** to the two-provider pill, and rc.6 add
 
 - **A clear glance.** Bold text, smooth rounded edges and crisp icons. The pill follows your Windows taskbar's light or dark theme.
 - **Two at a glance.** Show two providers side by side, such as ChatGPT and Claude. Set it up in the **Pill** tab of the overview, or right-click > **Show two providers**.
-- **A quiet interaction.** Click to cycle providers, middle-click for the quick view, right-click for actions. No hover popup. Transitions respect Windows animation preferences.
+- **A quiet interaction.** Click to cycle providers, right-click for the quick view and the menu. No hover popup. Transitions respect Windows animation preferences.
 - **A heads-up when it matters.** Optional notifications when an allowance runs low or a limit resets, and a red dot when a provider needs a new key or sign-in.
 - **Predictable visibility.** The pill hides when a full-screen app covers the primary taskbar and returns when the taskbar is exposed. You can disable full-screen hiding in Preferences.
 - **Freshness you can understand.** Background collection, refresh controls and explicit unavailable states. Missing data appears as `--`.
@@ -58,7 +60,7 @@ You need **Windows 11**, **Windows PowerShell 5.1**, and a supported, signed-in 
 
 1. [Download the source ZIP](https://github.com/Novendum/usage-tray-pill/archive/refs/heads/main.zip) and extract the **whole folder**, or clone this repository.
 2. Review the scripts, then double-click **`Start-UsageTrayPill.cmd`**.
-3. Right-click the pill to open its menu, or middle-click it for the quick view. Open the overview and Preferences to choose your sources.
+3. Right-click the pill for the quick view; its **⋯** button opens the menu. Open the overview and Preferences to choose your sources.
 
 No administrator rights are required. Keep `src/`, `scripts/` and `assets/` beside the start file. The users' ZIP includes the app and optional setup helpers; development tests and promotional media stay in the source repository. See the [user guide](docs/USER_GUIDE.md) for upgrading from the older flat folder.
 

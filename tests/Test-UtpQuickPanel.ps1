@@ -13,6 +13,9 @@ function Start-AllUsageRefresh { [void]$script:Actions.Add('refresh') }
 function Show-MainWindow { [void]$script:Actions.Add('overview') }
 function Show-OpenCodeGoSetupDialog { [void]$script:Actions.Add('setup-opencode') }
 function Show-QwenSetupDialog { [void]$script:Actions.Add('setup-qwen') }
+function Show-UtpMenu { [void]$script:Actions.Add('menu') }
+$script:TestShift = $false
+function Test-UtpMenuModifier { return $script:TestShift }
 function New-ClaudeSnapshot {
     param([double]$FiveHour = 15, [double]$Weekly = 62, [bool]$Stale = $false, [string]$ErrorCode = '')
     $now = Get-Date
@@ -100,12 +103,12 @@ foreach ($theme in @('Light', 'Dark')) {
     finally { $bitmap.Dispose() }
 }
 $hotspotActions = @($script:QuickPanelHotspots | ForEach-Object Action)
-Check (($hotspotActions -join ',') -eq 'setup:claude,refresh,overview') 'Click targets must cover setup for the provider that needs attention, refresh and the overview'
+Check (($hotspotActions -join ',') -eq 'menu,setup:claude,refresh,overview') 'Click targets must cover the menu, setup for the provider that needs attention, refresh and the overview'
 $script:BadgeTheme = 'Light'
 
 # Actions close the panel first and open the matching place.
-foreach ($action in @('refresh', 'overview', 'setup:opencodego', 'setup:qwen', 'setup:claude')) { Invoke-QuickPanelAction -Action $action }
-Check (($script:Actions -join ',') -eq 'refresh,overview,setup-opencode,setup-qwen,overview') 'Each quick panel action must open the matching place'
+foreach ($action in @('refresh', 'overview', 'setup:opencodego', 'setup:qwen', 'setup:claude', 'menu')) { Invoke-QuickPanelAction -Action $action }
+Check (($script:Actions -join ',') -eq 'refresh,overview,setup-opencode,setup-qwen,overview,menu') 'Each quick panel action must open the matching place'
 
 # Position: above the pill on a bottom taskbar, below it otherwise, always inside the work area.
 $work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
@@ -124,10 +127,69 @@ $script:BadgeForm.Visible = $false
 Check ((Get-QuickPanelBounds -Size $panelSize).Bottom -eq $work.Bottom - 10) 'A hidden pill must not anchor the panel'
 $script:BadgeForm = $null
 
-# Middle-click opens the quick view; the flyout is a shadowed tool window without a taskbar button.
+# Focus: after a click on the taskbar, Windows may move focus away right after the panel opens.
+# That must not close it. The real panel opens offscreen, so the test never shows a window.
+$realBounds = ${function:Get-QuickPanelBounds}
+function Get-QuickPanelBounds { param([System.Drawing.Size]$Size) return New-Object System.Drawing.Rectangle -20000, -20000, $Size.Width, $Size.Height }
+$script:BadgeForm = [pscustomobject]@{ IsDisposed = $false; Visible = $true; Bounds = (New-Object System.Drawing.Rectangle -20000, -19000, 200, 32) }
+Show-QuickPanel
+try {
+    Check ($null -ne $script:QuickPanel -and $script:QuickPanel.Visible) 'The quick view must open'
+    Check ($script:QuickPanel.ToggleBounds -eq $script:BadgeForm.Bounds) 'A right-click on the pill must be left to the pill, which toggles the panel'
+    [void][System.Windows.Forms.Form].GetMethod('OnDeactivate', [Reflection.BindingFlags]'Instance,NonPublic').Invoke($script:QuickPanel, @([EventArgs]::Empty))
+    Check ($null -ne $script:QuickPanel -and -not $script:QuickPanel.IsDisposed -and $script:QuickPanel.Visible) 'Losing focus right after opening must not close the quick view'
+    # A click on an action runs after the click event, then the panel closes.
+    $openPanel = $script:QuickPanel
+    $paintSurface = New-Object System.Drawing.Bitmap $openPanel.ClientSize.Width, $openPanel.ClientSize.Height
+    $paintGraphics = [System.Drawing.Graphics]::FromImage($paintSurface)
+    try { Draw-QuickPanel -Graphics $paintGraphics -Size $openPanel.ClientSize -Model @($openPanel.Tag) } finally { $paintGraphics.Dispose(); $paintSurface.Dispose() }
+    $overviewSpot = @($script:QuickPanelHotspots | Where-Object Action -eq 'overview')[0].Rect
+    Add-Type -Namespace UtpQuickTest -Name Native -MemberDefinition '[DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int m, IntPtr w, IntPtr l);'
+    $point = [IntPtr]((($overviewSpot.Top + 5) -shl 16) -bor ($overviewSpot.Left + 20))
+    $script:Actions.Clear()
+    [void][UtpQuickTest.Native]::SendMessage($openPanel.Handle, 0x0201, [IntPtr]1, $point)
+    [void][UtpQuickTest.Native]::SendMessage($openPanel.Handle, 0x0202, [IntPtr]::Zero, $point)
+    Check ($script:Actions.Count -eq 0 -and -not $openPanel.IsDisposed) 'A quick view action must wait until its click has finished'
+    $deadline = (Get-Date).AddSeconds(3)
+    while ($script:Actions.Count -eq 0 -and (Get-Date) -lt $deadline) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 10 }
+    Check (($script:Actions -join ',') -eq 'overview' -and $openPanel.IsDisposed -and $null -eq $script:QuickPanel) 'A clicked action must run once and close the quick view'
+    Show-QuickPanel
+    $openPanel = $script:QuickPanel
+    Show-QuickPanel
+    Check ($null -eq $script:QuickPanel -and $openPanel.IsDisposed) 'A second right-click must close the quick view'
+}
+finally {
+    Close-QuickPanel
+    Set-Item Function:Get-QuickPanelBounds -Value $realBounds
+    $script:BadgeForm = $null
+}
+$panelArea = New-Object System.Drawing.Rectangle 100, 100, 300, 400
+$pillArea = New-Object System.Drawing.Rectangle 120, 520, 200, 30
+$noButton = [System.Windows.Forms.MouseButtons]::None
+$leftButton = [System.Windows.Forms.MouseButtons]::Left
+$middleButton = [System.Windows.Forms.MouseButtons]::Middle
+$rightButton = [System.Windows.Forms.MouseButtons]::Right
+Check (-not [UtpFlyoutForm]::ShouldDismiss($panelArea, $pillArea, $noButton, (New-Object System.Drawing.Point 10, 10), $false)) 'Moving the mouse must not close the quick view'
+Check ([UtpFlyoutForm]::ShouldDismiss($panelArea, $pillArea, $leftButton, (New-Object System.Drawing.Point 10, 10), $false)) 'A click outside must close the quick view'
+Check (-not [UtpFlyoutForm]::ShouldDismiss($panelArea, $pillArea, $leftButton, (New-Object System.Drawing.Point 150, 150), $false)) 'A click inside must keep the quick view open'
+Check (-not [UtpFlyoutForm]::ShouldDismiss($panelArea, $pillArea, $rightButton, (New-Object System.Drawing.Point 130, 530), $false)) 'A right-click on the pill is the toggle and is handled by the pill'
+Check (-not [UtpFlyoutForm]::ShouldDismiss($panelArea, $pillArea, $middleButton, (New-Object System.Drawing.Point 130, 530), $false)) 'A middle-click on the pill is the toggle too'
+Check ([UtpFlyoutForm]::ShouldDismiss($panelArea, $pillArea, $rightButton, (New-Object System.Drawing.Point 10, 10), $false)) 'A right-click elsewhere must close the quick view'
+Check ([UtpFlyoutForm]::ShouldDismiss($panelArea, $pillArea, $leftButton, (New-Object System.Drawing.Point 130, 530), $false)) 'Another click on the pill must close the quick view'
+Check ([UtpFlyoutForm]::ShouldDismiss($panelArea, $pillArea, $noButton, (New-Object System.Drawing.Point 150, 150), $true)) 'Esc must close the quick view'
+
+# Right-click (or middle-click) opens the quick view; Shift+right-click opens the menu directly.
+# The flyout is a shadowed tool window without a taskbar button.
 function Show-QuickPanel { [void]$script:Actions.Add('quick') }
-Invoke-TaskbarBadgeMouseUp -EventArgs (New-Object System.Windows.Forms.MouseEventArgs ([System.Windows.Forms.MouseButtons]::Middle), 1, 10, 10, 0)
-Check ($script:Actions[-1] -eq 'quick') 'A middle-click on the pill must open the quick view'
+$script:Actions.Clear()
+foreach ($button in @([System.Windows.Forms.MouseButtons]::Right, [System.Windows.Forms.MouseButtons]::Middle)) {
+    Invoke-TaskbarBadgeMouseUp -EventArgs (New-Object System.Windows.Forms.MouseEventArgs $button, 1, 10, 10, 0)
+}
+Check (($script:Actions -join ',') -eq 'quick,quick') 'A right-click or middle-click on the pill must open the quick view'
+$script:TestShift = $true
+Invoke-TaskbarBadgeMouseUp -EventArgs (New-Object System.Windows.Forms.MouseEventArgs ([System.Windows.Forms.MouseButtons]::Right), 1, 10, 10, 0)
+$script:TestShift = $false
+Check ($script:Actions[-1] -eq 'menu') 'Shift+right-click on the pill must open the menu directly'
 $flyout = New-Object UtpFlyoutForm
 try {
     $createParams = [System.Windows.Forms.Form].GetProperty('CreateParams', [Reflection.BindingFlags]'Instance,NonPublic').GetValue($flyout, $null)
@@ -137,4 +199,4 @@ try {
 }
 finally { $flyout.Dispose() }
 
-Write-Host 'Quick panel tests OK (model, cached and attention states, size, light/dark rendering, meters, actions, position, flyout window).'
+Write-Host 'Quick panel tests OK (model, cached and attention states, size, light/dark rendering, meters, actions, position, focus loss, dismiss rules, flyout window).'

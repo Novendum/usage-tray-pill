@@ -4,6 +4,17 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.9] - 2026-10-20
+
+### Changed
+
+- Right-click the pill to open the quick view; middle-click still works too. The new **⋯** button in the quick view opens the full menu (setup, updates, resets, Exit). The tray icon and Shift+right-click on the pill open that menu directly.
+
+### Fixed
+
+- The quick view no longer closes the moment it opens. After a click on the taskbar pill, Windows often moves focus away again, and the quick view closed on that. It now stays open until you click outside it, press Esc or right-click the pill again.
+- Quick view actions such as setting up OpenCode Go now start after the click has finished, so the panel never closes in the middle of its own click.
+
 ## [0.1.0-rc.8] - 2026-10-20
 
 ### Added

@@ -190,8 +190,14 @@ public class UtpPillForm : Form
 }
 
 // Borderless flyout (quick view) with the classic drop shadow and flicker-free painting.
+// Stays open until the user is done with it: a click outside it, Esc, or a second right-click
+// on the pill closes it. Windows does not reliably let a tray app keep focus after a click on
+// the taskbar, so losing focus is not a reason to close.
 public class UtpFlyoutForm : Form
 {
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int virtualKey);
+    private readonly System.Windows.Forms.Timer watch = new System.Windows.Forms.Timer();
+
     public UtpFlyoutForm()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
@@ -199,8 +205,41 @@ public class UtpFlyoutForm : Form
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
         KeyPreview = true;
+        watch.Interval = 80;
+        watch.Tick += delegate { WatchForDismiss(); };
     }
+
+    // The pill: its own right- or middle-click toggles the panel, so that click is left to the pill.
+    public Rectangle ToggleBounds { get; set; }
+
     protected override CreateParams CreateParams {
         get { var p = base.CreateParams; p.ClassStyle |= 0x00020000; p.ExStyle |= 0x00000080; return p; }
+    }
+
+    public static bool ShouldDismiss(Rectangle panel, Rectangle toggle, MouseButtons buttons, Point cursor, bool escape)
+    {
+        if (escape) return true;
+        if (buttons == MouseButtons.None || panel.Contains(cursor)) return false;
+        bool toggleClick = buttons == MouseButtons.Right || buttons == MouseButtons.Middle;
+        return !(toggleClick && toggle.Contains(cursor));
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        watch.Start();
+    }
+
+    private void WatchForDismiss()
+    {
+        if (IsDisposed || !Visible) { watch.Stop(); return; }
+        bool escape = (GetAsyncKeyState(0x1B) & 0x8000) != 0;
+        if (ShouldDismiss(Bounds, ToggleBounds, Control.MouseButtons, Cursor.Position, escape)) Close();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { watch.Stop(); watch.Dispose(); }
+        base.Dispose(disposing);
     }
 }
