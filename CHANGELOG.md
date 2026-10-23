@@ -4,6 +4,21 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.12] - 2026-10-24
+
+### Added
+
+- **Choose which limits the pill shows.** The **Pill** tab lists every provider with a check box per limit, such as **5-hour** and **Weekly**, with a live preview. Turn off what does not apply to you, for example the weekly limit of a Claude Team plan, which has none. Hidden limits also stay out of **Tightest window only** and the alerts; the quick view still shows everything. The last limit of a provider stays on. Your rc.11 choice for the ChatGPT / Codex 5-hour limit carries over.
+
+### Changed
+
+- A tighter pill with reset clocks. A limit you have not used yet (100% left) no longer shows a clock: ChatGPT and Claude move its reset along with every refresh, so it stood still at `5h` or `7d`. The quick view no longer promises a reset for it either.
+- Each clock now keeps only the room its own kind of time needs, such as `3m`, `2h10m` or `6d5h`, instead of always the room for `0h00m`. The pill still keeps its width while the time ticks down and narrows once when a limit enters its last hour.
+
+### Fixed
+
+- At the smallest overview size, the hint at the bottom no longer runs under **Hide**, and the **Pill** tab no longer shows a needless horizontal scroll bar.
+
 ## [0.1.0-rc.11] - 2026-10-23
 
 ### Added

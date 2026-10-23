@@ -160,7 +160,7 @@ try {
     Check (@(Get-UsageNotificationObservations | Where-Object Key -like 'claude*').Count -eq 0) 'Cached Claude values must never notify'
     $script:State.liveUsage.buckets = @([pscustomobject]@{ limitId = 'codex'; primaryRemainingPercent = 8; primaryWindowDurationMins = 300; primaryResetsAt = (Get-Date).AddHours(2).ToString('o'); secondaryRemainingPercent = 41; secondaryWindowDurationMins = 10080; secondaryResetsAt = (Get-Date).AddDays(2).ToString('o') })
     Check ((@(Get-UsageNotificationObservations | Where-Object Key -like 'codex*' | ForEach-Object Key) -join ',') -eq 'codex|5h,codex|weekly') 'A Codex 5-hour limit must be watched like the weekly one'
-    $script:State.settings.taskbarBadgeCodexFiveHour = $false
+    $script:State.settings.taskbarBadgeHiddenWindows = @('codex|5h')
     Check ((@(Get-UsageNotificationObservations | Where-Object Key -like 'codex*' | ForEach-Object Key) -join ',') -eq 'codex|weekly') 'A hidden Codex 5-hour window must not notify'
     $script:State = New-TestState
 
