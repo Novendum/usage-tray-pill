@@ -55,6 +55,10 @@ try {
     }
     $tabs.SelectedIndex=0
     $script:MainForm.Size=$script:MainForm.MinimumSize
+    [Windows.Forms.Application]::DoEvents()
+    $footerLabel=@($controls | Where-Object { $_ -is [Windows.Forms.Label] -and $_.Text -like 'Click the pill*' })[0]
+    $firstFooterButton=@($controls | Where-Object { $_ -is [Windows.Forms.Button] -and $_.Parent -eq $script:MainForm } | Sort-Object Left)[0]
+    Check ($footerLabel.Right -le $firstFooterButton.Left) 'At the minimum size the footer text must stay clear of Hide and Exit'
     foreach ($page in $tabs.TabPages) {
         $tabs.SelectedTab=$page
         [Windows.Forms.Application]::DoEvents()
@@ -107,14 +111,21 @@ try {
     Set-TaskbarBadgePreference -Detail all
     $click.Invoke($pill.Single,@([EventArgs]::Empty)) | Out-Null
     Check ($script:State.settings.taskbarBadgeLayout -eq 'single' -and -not $pill.Left.Enabled) 'Choosing one provider must restore the single pill'
-    Check ($pill.CodexFiveHour.Enabled -and $pill.CodexFiveHour.Checked) 'The Codex 5-hour choice must be available with one provider and on by default'
+    # Limits in the pill: one row per enabled provider, a check box per limit, the last one locked.
+    $codexRow=$pill.LimitRows['codex']
+    $codexChecks=@($codexRow.Checks | Where-Object { [string]$_.Tag })
+    Check ((@($codexChecks | ForEach-Object Text) -join ',') -eq '5-hour,Weekly' -and @($codexChecks | Where-Object { -not $_.Checked -or -not $_.Enabled }).Count -eq 0) 'Codex must offer its two limits, both shown and changeable'
+    Check ($pill.LimitRows['claude'].Name.Text -eq 'Claude' -and -not [string]$pill.LimitRows['opencodego'].Name.Text) 'Only enabled providers may get a row'
+    Check ($pill.LimitRows['antigravity'].Note.Text -match 'once Antigravity reports' -and @($pill.LimitRows['antigravity'].Checks | Where-Object { [string]$_.Tag }).Count -eq 0) 'A provider without data must explain instead of offering a placeholder'
+    Check ($pill.Hint.Top -ge ($codexRow.Name.Top + 3 * 28)) 'The hint must follow the provider rows'
     Check ($pill.Preview.AccessibleName -match 'ChatGPT / Codex: 5h 75%, weekly 64%') 'The preview must announce both Codex windows'
-    $click.Invoke($pill.CodexFiveHour,@([EventArgs]::Empty)) | Out-Null
-    Check ($script:State.settings.taskbarBadgeCodexFiveHour -eq $false -and -not $pill.CodexFiveHour.Checked) 'Hiding the Codex 5-hour window must apply'
-    Check ($pill.Preview.AccessibleName -match 'ChatGPT / Codex: weekly 64%') 'The preview must follow the Codex 5-hour choice'
-    Check ((Get-Content -LiteralPath $script:DataPath -Raw | ConvertFrom-Json).settings.taskbarBadgeCodexFiveHour -eq $false) 'The Codex 5-hour choice must be saved'
-    $click.Invoke($pill.CodexFiveHour,@([EventArgs]::Empty)) | Out-Null
-    Check ($script:State.settings.taskbarBadgeCodexFiveHour -eq $true -and $pill.CodexFiveHour.Checked) 'The Codex 5-hour window must come back'
+    $click.Invoke($codexChecks[0],@([EventArgs]::Empty)) | Out-Null
+    Check ((@($script:State.settings.taskbarBadgeHiddenWindows) -join ',') -eq 'codex|5h' -and -not $codexChecks[0].Checked) 'Hiding the Codex 5-hour limit must apply'
+    Check (-not $codexChecks[1].Enabled -and $codexChecks[1].Checked) 'The last Codex limit must be locked'
+    Check ($pill.Preview.AccessibleName -match 'ChatGPT / Codex: weekly 64%') 'The preview must follow the choice'
+    Check ((@((Get-Content -LiteralPath $script:DataPath -Raw | ConvertFrom-Json).settings.taskbarBadgeHiddenWindows) -join ',') -eq 'codex|5h') 'The choice must be saved'
+    $click.Invoke($codexChecks[0],@([EventArgs]::Empty)) | Out-Null
+    Check (@($script:State.settings.taskbarBadgeHiddenWindows).Count -eq 0 -and $codexChecks[0].Checked -and $codexChecks[1].Enabled) 'The Codex 5-hour limit must come back'
 
     # A delayed synthetic provider exercises the real process lifecycle with no provider requests.
     $workerPath=Join-Path $testRoot 'worker.ps1'
