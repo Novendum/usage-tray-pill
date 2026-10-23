@@ -107,6 +107,14 @@ try {
     Set-TaskbarBadgePreference -Detail all
     $click.Invoke($pill.Single,@([EventArgs]::Empty)) | Out-Null
     Check ($script:State.settings.taskbarBadgeLayout -eq 'single' -and -not $pill.Left.Enabled) 'Choosing one provider must restore the single pill'
+    Check ($pill.CodexFiveHour.Enabled -and $pill.CodexFiveHour.Checked) 'The Codex 5-hour choice must be available with one provider and on by default'
+    Check ($pill.Preview.AccessibleName -match 'ChatGPT / Codex: 5h 75%, weekly 64%') 'The preview must announce both Codex windows'
+    $click.Invoke($pill.CodexFiveHour,@([EventArgs]::Empty)) | Out-Null
+    Check ($script:State.settings.taskbarBadgeCodexFiveHour -eq $false -and -not $pill.CodexFiveHour.Checked) 'Hiding the Codex 5-hour window must apply'
+    Check ($pill.Preview.AccessibleName -match 'ChatGPT / Codex: weekly 64%') 'The preview must follow the Codex 5-hour choice'
+    Check ((Get-Content -LiteralPath $script:DataPath -Raw | ConvertFrom-Json).settings.taskbarBadgeCodexFiveHour -eq $false) 'The Codex 5-hour choice must be saved'
+    $click.Invoke($pill.CodexFiveHour,@([EventArgs]::Empty)) | Out-Null
+    Check ($script:State.settings.taskbarBadgeCodexFiveHour -eq $true -and $pill.CodexFiveHour.Checked) 'The Codex 5-hour window must come back'
 
     # A delayed synthetic provider exercises the real process lifecycle with no provider requests.
     $workerPath=Join-Path $testRoot 'worker.ps1'

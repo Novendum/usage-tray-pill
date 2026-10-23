@@ -4,6 +4,20 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.11] - 2026-10-23
+
+### Added
+
+- **The ChatGPT / Codex 5-hour limit in the pill.** Plans with a 5-hour limit, such as ChatGPT Plus, now show it before the weekly limit, with one provider and with two. The optional reset clock and low-allowance alerts cover it too. To keep only the weekly limit, turn off **Show the ChatGPT / Codex 5-hour limit when your plan has one** in the **Pill** tab. Plans without a 5-hour limit look as before.
+
+### Changed
+
+- With **Tightest window only**, ChatGPT / Codex now weighs its 5-hour limit against the weekly one and shows whichever has the least left. A used-up weekly limit therefore still wins over a full 5-hour window.
+
+### Fixed
+
+- Countdown tests no longer fail on a PC whose clock changes for daylight saving time within the next three days.
+
 ## [0.1.0-rc.10] - 2026-10-20
 
 ### Fixed

@@ -12,7 +12,8 @@ function Get-AntigravityUsageSnapshot { return $null }
 function Get-ClaudeUsageSnapshot { return $script:TestClaude }
 function New-ClaudeSnapshot {
     param([double]$FiveHour = 60, [double]$Weekly = 40, [bool]$Stale = $false, [string]$ErrorCode = '')
-    $now = Get-Date
+    # Absolute time: wall-clock arithmetic gains or loses an hour across a daylight saving change.
+    $now = [DateTimeOffset]::Now
     return [pscustomobject]@{
         lastCheckedAt = $now.ToString('o'); lastSuccessAt = $now.ToString('o'); lastError = ''; errorCode = $ErrorCode; stale = $Stale
         limits = @(
@@ -85,7 +86,7 @@ try {
     $script:State.settings.taskbarBadgeResetCountdownWeekly = $true
     $items = @((Get-TaskbarBadgeSegment -Source 'claude').Items)
     Check ($items[0].Countdown -eq '2h10m' -and $items[1].Countdown -eq '3d') 'The weekly window must count down in days when enabled'
-    $script:State.liveUsage.buckets = @([pscustomobject]@{ limitId = 'codex'; primaryRemainingPercent = 55; primaryWindowDurationMins = 2880; primaryResetsAt = (Get-Date).AddHours(30).AddSeconds(-30).ToString('o') })
+    $script:State.liveUsage.buckets = @([pscustomobject]@{ limitId = 'codex'; primaryRemainingPercent = 55; primaryWindowDurationMins = 2880; primaryResetsAt = [DateTimeOffset]::Now.AddHours(30).AddSeconds(-30).ToString('o') })
     Check (@((Get-TaskbarBadgeSegment -Source 'codex').Items)[0].Countdown -eq '1d6h') 'Day-length Codex windows must count down with the long option'
     $script:TestClaude = New-ClaudeSnapshot -Stale $true
     Check (@((Get-TaskbarBadgeSegment -Source 'claude').Items | Where-Object Countdown).Count -eq 0) 'Cached values must never count down'
@@ -157,6 +158,11 @@ try {
     Check (@($observations | ForEach-Object Key) -join ',' -eq 'codex|weekly,claude|5h,claude|weekly') 'Only known provider windows may be observed'
     $script:TestClaude = New-ClaudeSnapshot -FiveHour 9 -Stale $true
     Check (@(Get-UsageNotificationObservations | Where-Object Key -like 'claude*').Count -eq 0) 'Cached Claude values must never notify'
+    $script:State.liveUsage.buckets = @([pscustomobject]@{ limitId = 'codex'; primaryRemainingPercent = 8; primaryWindowDurationMins = 300; primaryResetsAt = (Get-Date).AddHours(2).ToString('o'); secondaryRemainingPercent = 41; secondaryWindowDurationMins = 10080; secondaryResetsAt = (Get-Date).AddDays(2).ToString('o') })
+    Check ((@(Get-UsageNotificationObservations | Where-Object Key -like 'codex*' | ForEach-Object Key) -join ',') -eq 'codex|5h,codex|weekly') 'A Codex 5-hour limit must be watched like the weekly one'
+    $script:State.settings.taskbarBadgeCodexFiveHour = $false
+    Check ((@(Get-UsageNotificationObservations | Where-Object Key -like 'codex*' | ForEach-Object Key) -join ',') -eq 'codex|weekly') 'A hidden Codex 5-hour window must not notify'
+    $script:State = New-TestState
 
     # Integration: one balloon per check, state persisted, nothing when both options are off.
     $script:Sent = New-Object System.Collections.ArrayList

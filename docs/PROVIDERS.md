@@ -8,7 +8,7 @@ Choose only the providers you use. CLI sign-in is managed by the provider; do no
 
 UTP starts the locally installed `codex app-server --stdio` command and requests `account/rateLimits/read`. This local interface is experimental and may change between Codex releases.
 
-The background collector keeps this connection open and normally refreshes every 60 seconds. Select the account limit bucket in Preferences; UTP retains fractional percentages and displays a positive remainder below one percent as `<1%` rather than rounding it to zero.
+The background collector keeps this connection open and normally refreshes every 60 seconds. Select the account limit bucket in Preferences; UTP retains fractional percentages and displays a positive remainder below one percent as `<1%` rather than rounding it to zero. The pill shows the weekly window and, when the plan has one, the 5-hour window before it; the **Pill** tab can hide the 5-hour window. The quick view always lists both.
 
 ### Claude
 
