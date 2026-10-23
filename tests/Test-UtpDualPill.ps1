@@ -102,7 +102,7 @@ Check ($now.ToUniversalTime().AddMinutes(95).ToString('o') -match 'Z|\+00:00' -a
 Check (-not [bool](New-DefaultState).settings.taskbarBadgeResetCountdown) 'The countdown must be off by default'
 $script:State=New-TestState
 $script:State.settings.taskbarBadgeLayout='dual'
-$script:TestClaude=[pscustomobject]@{lastCheckedAt=(Get-Date).ToString('o');lastSuccessAt=(Get-Date).ToString('o');lastError='';stale=$false;fiveHourRemainingPercent=80;fiveHourResetsAt=(Get-Date).AddMinutes(130).ToString('o');sevenDayRemainingPercent=62;sevenDayResetsAt=(Get-Date).AddDays(3).ToString('o');limits=@()}
+$script:TestClaude=[pscustomobject]@{lastCheckedAt=(Get-Date).ToString('o');lastSuccessAt=(Get-Date).ToString('o');lastError='';stale=$false;fiveHourRemainingPercent=80;fiveHourResetsAt=[DateTimeOffset]::Now.AddMinutes(130).ToString('o');sevenDayRemainingPercent=62;sevenDayResetsAt=(Get-Date).AddDays(3).ToString('o');limits=@()}
 $plain=Get-TaskbarBadgeData -Source dual
 Check (@($plain.Segments[1].Parts | Where-Object Kind -eq 'countdown').Count -eq 0) 'Without the option the pill must not show a countdown'
 $script:State.settings.taskbarBadgeResetCountdown=$true
@@ -119,6 +119,47 @@ $script:TestClaude.stale=$true
 Check (@((Get-TaskbarBadgeData -Source dual).Segments[1].Parts | Where-Object Kind -eq 'countdown').Count -eq 0) 'Cached values must not count down'
 # The rendering checks below include the clock glyph and countdown text.
 $script:TestClaude=[pscustomobject]@{lastCheckedAt=(Get-Date).ToString('o');lastSuccessAt=(Get-Date).ToString('o');lastError='';stale=$false;fiveHourRemainingPercent=80;fiveHourResetsAt=(Get-Date).AddMinutes(130).ToString('o');sevenDayRemainingPercent=62;limits=@()}
+
+# Codex 5-hour window: on by default when the plan has one, optional, never shown twice.
+function New-CodexBucket { param($FiveHour,$Weekly,$FiveHourResetsAt=[DateTimeOffset]::Now.AddMinutes(130).ToString('o')) [pscustomobject]@{limitId='codex';primaryRemainingPercent=$FiveHour;primaryWindowDurationMins=300;primaryResetsAt=$FiveHourResetsAt;secondaryRemainingPercent=$Weekly;secondaryWindowDurationMins=10080;secondaryResetsAt=[DateTimeOffset]::Now.AddDays(6).AddHours(5).ToString('o')} }
+function Get-CodexText { param($Items) (@($Items | ForEach-Object { "$($_.Label) $($_.Text)" }) -join ',') }
+Check ((New-DefaultState).settings.taskbarBadgeCodexFiveHour -eq $true) 'The Codex 5-hour window must be on by default'
+$legacy=New-DefaultState
+$legacy.settings.PSObject.Properties.Remove('taskbarBadgeCodexFiveHour')
+Check ((Normalize-State $legacy).settings.taskbarBadgeCodexFiveHour -eq $true) 'Existing settings must gain the Codex 5-hour window'
+foreach($value in @('off',0,$null)){ $odd=New-DefaultState; $odd.settings.taskbarBadgeCodexFiveHour=$value; Check ((Normalize-State $odd).settings.taskbarBadgeCodexFiveHour -eq $true) "Only a saved false may hide the Codex 5-hour window ($value)" }
+$hidden=New-DefaultState
+$hidden.settings.taskbarBadgeCodexFiveHour=$false
+Check ((Normalize-State ($hidden | ConvertTo-Json -Depth 8 | ConvertFrom-Json)).settings.taskbarBadgeCodexFiveHour -eq $false) 'Hiding the Codex 5-hour window must survive a settings round trip'
+$countdownState=$script:State
+$script:State=New-TestState
+$script:State.settings.taskbarBadgeLayout='dual'
+$script:State.liveUsage.buckets=@(New-CodexBucket 100 0)
+$plus=Get-TaskbarBadgeData -Source codex
+Check ((Get-CodexText $plus.Items) -eq '5h 100%,weekly 0%') 'A plan with a 5-hour limit must show it before the weekly window'
+Check ($plus.PrimaryPrefix -eq '5h' -and $plus.SecondaryPrefix -eq 'weekly' -and $plus.Width -gt 176) 'The one-provider pill must make room for both Codex windows'
+Check ((Get-CodexText (Get-TaskbarBadgeData -Source dual).Segments[0].Items) -eq '5h 100%,wk 0%') 'Two providers must show both Codex windows'
+$script:State.settings.taskbarBadgeDualDetail='tightest'
+Check ((Get-CodexText (Get-TaskbarBadgeData -Source dual).Segments[0].Items) -eq 'wk 0%') 'Tightest mode must keep an exhausted weekly window'
+$script:State.liveUsage.buckets=@(New-CodexBucket 12 64)
+Check ((Get-CodexText (Get-TaskbarBadgeData -Source dual).Segments[0].Items) -eq '5h 12%') 'Tightest mode must pick the Codex 5-hour window when it binds'
+$script:State.settings.taskbarBadgeDualDetail='all'
+$script:State.settings.taskbarBadgeResetCountdown=$true
+$codexParts=@((Get-TaskbarBadgeData -Source dual).Segments[0].Parts)
+Check (@($codexParts | Where-Object Kind -eq 'countdown').Count -eq 1 -and @($codexParts | Where-Object Kind -eq 'countdown')[0].Text -match '^2h(09|10)m$') 'Only the Codex 5-hour window may count down by default'
+$script:State.liveUsage.buckets=@(New-CodexBucket 100 64 -FiveHourResetsAt (Get-Date).AddMinutes(-1).ToString('o'))
+$stale=Get-TaskbarBadgeData -Source dual
+Check ((Get-CodexText $stale.Segments[0].Items) -eq '5h --,wk 64%') 'A Codex 5-hour window that just reset must stay as unknown until the next refresh'
+Check (@($stale.Segments[0].Parts | Where-Object Kind -eq 'countdown').Count -eq 0) 'An unknown Codex 5-hour window must not count down'
+$script:State.liveUsage.buckets=@([pscustomobject]@{limitId='codex';primaryRemainingPercent=61;primaryWindowDurationMins=300;primaryResetsAt=(Get-Date).AddHours(2).ToString('o')})
+Check ((Get-CodexText (Get-TaskbarBadgeData -Source codex).Items) -eq '5h 61%') 'A plan with only a 5-hour window must show it once'
+$script:State.liveUsage.buckets=@(New-CodexBucket 12 64)
+$script:State.settings.taskbarBadgeCodexFiveHour=$false
+$weeklyOnly=Get-TaskbarBadgeData -Source codex
+Check ((Get-CodexText $weeklyOnly.Items) -eq 'weekly 64%' -and $weeklyOnly.Width -eq 176) 'Hiding the Codex 5-hour window must restore the weekly-only pill'
+Check ((Get-CodexText (Get-TaskbarBadgeData -Source dual).Segments[0].Items) -eq 'wk 64%') 'Hiding the Codex 5-hour window must apply to two providers too'
+Check ((@((Get-QuickViewModel)[0].Windows | ForEach-Object Text) -join ',') -eq '12%,64%') 'The quick view must keep both Codex windows when the pill hides one'
+$script:State=$countdownState
 
 # Rendering: native text and divider stay inside the opaque interior at every DPI and theme.
 foreach($theme in @('Light','Dark')) {
@@ -193,6 +234,20 @@ try {
     Set-TaskbarBadgePreference -Slot 0 -Source codex
     Check ((@(Get-TaskbarBadgeDualSources) -join ',') -eq 'codex,claude') 'Choosing the other side''s provider must swap instead of duplicating'
     Check ((@($script:BadgeDualData.Sources) -join ',') -eq 'codex,claude') 'Side choices must redraw the pill'
+
+    $weeklyBuckets=$script:State.liveUsage.buckets
+    $script:State.liveUsage.buckets=@(New-CodexBucket 72 41)
+    Set-TaskbarBadgePreference -CodexFiveHour on
+    $wide=$script:BadgeForm.Width
+    Check ((Get-CodexText $script:BadgeDualData.Segments[0].Items) -eq '5h 72%,wk 41%') 'The live pill must show the Codex 5-hour window'
+    $saves=$script:TestSaveCount
+    Set-TaskbarBadgePreference -CodexFiveHour off
+    Check ($script:TestSaveCount -gt $saves -and $script:State.settings.taskbarBadgeCodexFiveHour -eq $false) 'Hiding the Codex 5-hour window must be saved'
+    Check ((Get-CodexText $script:BadgeDualData.Segments[0].Items) -eq 'wk 41%' -and $script:BadgeForm.Width -lt $wide) 'Hiding the Codex 5-hour window must redraw a narrower pill right away'
+    Set-TaskbarBadgePreference -CodexFiveHour on
+    Check ($script:State.settings.taskbarBadgeCodexFiveHour -eq $true -and $script:BadgeForm.Width -eq $wide) 'Showing it again must restore the wider pill'
+    $script:State.liveUsage.buckets=$weeklyBuckets
+    Refresh-TaskbarBadge
 
     $script:TestTheme='Dark'
     Refresh-TaskbarBadge -GeometryOnly

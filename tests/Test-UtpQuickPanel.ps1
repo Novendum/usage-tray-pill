@@ -18,7 +18,8 @@ $script:TestShift = $false
 function Test-UtpMenuModifier { return $script:TestShift }
 function New-ClaudeSnapshot {
     param([double]$FiveHour = 15, [double]$Weekly = 62, [bool]$Stale = $false, [string]$ErrorCode = '')
-    $now = Get-Date
+    # Absolute time: wall-clock arithmetic gains or loses an hour across a daylight saving change.
+    $now = [DateTimeOffset]::Now
     return [pscustomobject]@{
         lastCheckedAt = $now.ToString('o'); lastSuccessAt = $now.AddMinutes(-20).ToString('o'); lastError = ''; errorCode = $ErrorCode; stale = $Stale; available = $true
         limits = @(
@@ -49,8 +50,8 @@ $script:State = New-DefaultState
 $script:State.liveUsage.lastCheckedAt = (Get-Date).ToString('o')
 $script:State.liveUsage.buckets = @([pscustomobject]@{
     limitId = 'codex'
-    primaryRemainingPercent = 72; primaryWindowDurationMins = 300; primaryResetsAt = (Get-Date).AddHours(1).AddSeconds(-30).ToString('o')
-    secondaryRemainingPercent = 41; secondaryWindowDurationMins = 10080; secondaryResetsAt = (Get-Date).AddDays(2).AddSeconds(-30).ToString('o')
+    primaryRemainingPercent = 72; primaryWindowDurationMins = 300; primaryResetsAt = [DateTimeOffset]::Now.AddHours(1).AddSeconds(-30).ToString('o')
+    secondaryRemainingPercent = 41; secondaryWindowDurationMins = 10080; secondaryResetsAt = [DateTimeOffset]::Now.AddDays(2).AddSeconds(-30).ToString('o')
 })
 $script:State.settings.claudeControlEnabled = $true
 $script:TestClaude = New-ClaudeSnapshot

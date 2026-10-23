@@ -146,7 +146,7 @@ if (-not ($RefreshLiveOnce -or $RefreshAntigravityOnce -or $RefreshOpenCodeGoOnc
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:AppName = "Usage Tray Pill"
-$script:AppVersion = "0.1.0-rc.10"
+$script:AppVersion = "0.1.0-rc.11"
 $script:DataDir = Join-Path $env:APPDATA "UsageTrayPill"
 $script:DataPath = Join-Path $script:DataDir "data.json"
 $script:CodexUsagePath = Join-Path $script:DataDir "codex-usage.json"
@@ -393,6 +393,7 @@ function New-DefaultState {
             taskbarBadgeDualDetail = "all"
             taskbarBadgeResetCountdown = $false
             taskbarBadgeResetCountdownWeekly = $false
+            taskbarBadgeCodexFiveHour = $true
             openCodeGoKeySource = "auto"
             notifyLowAllowance = $false
             notifyLowThreshold = 10
@@ -477,6 +478,7 @@ function Normalize-State {
     Ensure-Property -Target $State.settings -Name "taskbarBadgeDualDetail" -Value "all"
     Ensure-Property -Target $State.settings -Name "taskbarBadgeResetCountdown" -Value $false
     Ensure-Property -Target $State.settings -Name "taskbarBadgeResetCountdownWeekly" -Value $false
+    Ensure-Property -Target $State.settings -Name "taskbarBadgeCodexFiveHour" -Value $true
     Ensure-Property -Target $State.settings -Name "openCodeGoKeySource" -Value "auto"
     Ensure-Property -Target $State.settings -Name "notifyLowAllowance" -Value $false
     Ensure-Property -Target $State.settings -Name "notifyLowThreshold" -Value 10
@@ -517,6 +519,8 @@ function Normalize-State {
     }
     $State.settings.taskbarBadgeResetCountdown = ($State.settings.taskbarBadgeResetCountdown -eq $true)
     $State.settings.taskbarBadgeResetCountdownWeekly = ($State.settings.taskbarBadgeResetCountdownWeekly -eq $true)
+    # On by default: only a saved false hides the Codex 5-hour window.
+    $State.settings.taskbarBadgeCodexFiveHour = -not ($State.settings.taskbarBadgeCodexFiveHour -is [bool] -and -not $State.settings.taskbarBadgeCodexFiveHour)
     if ([string]$State.settings.openCodeGoKeySource -notin @("auto", "saved")) { $State.settings.openCodeGoKeySource = "auto" }
     $State.settings.notifyLowAllowance = ($State.settings.notifyLowAllowance -eq $true)
     $State.settings.notifyReset = ($State.settings.notifyReset -eq $true)
@@ -1927,18 +1931,35 @@ function Get-TaskbarBadgeData {
         $codexWindow = Get-LiveBucketWindow -Bucket $bucket -Minutes 10080
         $codexResetsAt = if ($null -ne $codexWindow) { [string]$codexWindow.resetsAt } else { [string]$bucket.primaryResetsAt }
     }
-    $codexItem = [pscustomobject]@{ Label = $windowLabel; Text = $codexSecondaryText; Color = $codexSecondaryColor; ResetsAt = $codexResetsAt }
+    $items = @()
+    # Plans with a 5-hour limit show it before the weekly window, unless the user turned it off.
+    # Without a weekly window the primary window above already is the 5-hour window.
+    if ([bool]$script:State.settings.taskbarBadgeCodexFiveHour -and $null -ne (Get-LiveBucketWindow -Bucket $bucket -Minutes 10080)) {
+        $fiveHour = Get-LiveBucketWindow -Bucket $bucket -Minutes 300
+        if ($null -ne $fiveHour) {
+            # A window that just reset stays in place as "--" until the next refresh, so the pill keeps its width.
+            $known = $null -ne $fiveHour.remainingPercent
+            $items += [pscustomobject]@{
+                Label = '5h'
+                Text = $(if ($known) { Format-RemainingPercent $fiveHour.remainingPercent } else { '--' })
+                Color = $(if ($known) { Get-PercentColor -Percent $fiveHour.remainingPercent } else { $neutralColor })
+                ResetsAt = $(if ($known) { [string]$fiveHour.resetsAt } else { '' })
+            }
+        }
+    }
+    $items += [pscustomobject]@{ Label = $windowLabel; Text = $codexSecondaryText; Color = $codexSecondaryColor; ResetsAt = $codexResetsAt }
+    $second = if ($items.Count -gt 1) { $items[1] } else { $null }
     return [pscustomobject]@{
         Source = "codex"
         SourceText = ""
-        PrimaryPrefix = $windowLabel
-        PrimaryText = $codexSecondaryText
-        PrimaryColor = $codexSecondaryColor
-        SecondaryPrefix = ""
-        SecondaryText = ""
-        SecondaryColor = $neutralColor
-        Items = @($codexItem)
-        Width = [Math]::Max($script:BadgeMinimumWidth, $script:BadgeHorizontalChrome + (Get-BadgeContentWidth -Items @($codexItem)))
+        PrimaryPrefix = $items[0].Label
+        PrimaryText = $items[0].Text
+        PrimaryColor = $items[0].Color
+        SecondaryPrefix = $(if ($null -ne $second) { $second.Label } else { "" })
+        SecondaryText = $(if ($null -ne $second) { $second.Text } else { "" })
+        SecondaryColor = $(if ($null -ne $second) { $second.Color } else { $neutralColor })
+        Items = @($items)
+        Width = [Math]::Max($script:BadgeMinimumWidth, $script:BadgeHorizontalChrome + (Get-BadgeContentWidth -Items $items))
     }
 }
 
@@ -3659,6 +3680,7 @@ function Set-TaskbarBadgePreference {
         [string]$Detail = "",
         [string]$Countdown = "",
         [string]$CountdownWeekly = "",
+        [string]$CodexFiveHour = "",
         [switch]$Swap
     )
 
@@ -3677,6 +3699,7 @@ function Set-TaskbarBadgePreference {
     if ($Detail -in @("all", "tightest")) { $settings.taskbarBadgeDualDetail = $Detail }
     if ($Countdown -in @("on", "off")) { $settings.taskbarBadgeResetCountdown = ($Countdown -eq "on") }
     if ($CountdownWeekly -in @("on", "off")) { $settings.taskbarBadgeResetCountdownWeekly = ($CountdownWeekly -eq "on") }
+    if ($CodexFiveHour -in @("on", "off")) { $settings.taskbarBadgeCodexFiveHour = ($CodexFiveHour -eq "on") }
     Save-State
     $script:PendingStateSave = $false
     Reset-TaskbarBadgeTransition
@@ -5578,7 +5601,7 @@ function Get-QuickViewModel {
         $data = Get-TaskbarBadgeData -Source $source
         $items = @($data.Items | Where-Object { $_.Label -ne 'cache' })
         if ($source -eq 'codex') {
-            # The pill shows one Codex window; the quick view shows every window Codex reports.
+            # The quick view shows every window Codex reports, also when the pill hides the 5-hour window.
             $bucket = Get-MainLiveBucket
             $codexItems = @(foreach ($window in @(@{Label='5h';Minutes=300},@{Label='weekly';Minutes=10080})) {
                 $value = Get-LiveBucketWindow -Bucket $bucket -Minutes $window.Minutes
@@ -5954,14 +5977,22 @@ function New-PillPreferencesPage {
     $countdownWeeklyCheck.Add_Click({ param($eventSource,$eventData) Set-TaskbarBadgePreference -CountdownWeekly $(if($eventSource.Checked){'on'}else{'off'}) })
     $Page.Controls.Add($countdownWeeklyCheck)
 
+    $codexFiveHourCheck = New-Object System.Windows.Forms.CheckBox
+    $codexFiveHourCheck.Text = 'Show the ChatGPT / Codex 5-hour limit when your plan has one'
+    $codexFiveHourCheck.AccessibleName = 'Show the ChatGPT and Codex 5-hour limit in the pill'
+    $codexFiveHourCheck.Location = New-Object System.Drawing.Point 28,312
+    $codexFiveHourCheck.Size = New-Object System.Drawing.Size 560,24
+    $codexFiveHourCheck.Add_Click({ param($eventSource,$eventData) Set-TaskbarBadgePreference -CodexFiveHour $(if($eventSource.Checked){'on'}else{'off'}) })
+    $Page.Controls.Add($codexFiveHourCheck)
+
     $hint = New-Object System.Windows.Forms.Label
     $hint.Text = 'With two providers, click the left or right side of the pill to switch that side. Period labels shorten to 5h, wk and mo so both fit.'
-    $hint.Location = New-Object System.Drawing.Point 28,316
+    $hint.Location = New-Object System.Drawing.Point 28,346
     $hint.Size = New-Object System.Drawing.Size 760,38
     $hint.ForeColor = $muted
     $Page.Controls.Add($hint)
 
-    $controls = @{Page=$Page;Strip=$strip;Preview=$preview;Single=$singleRadio;Dual=$dualRadio;Left=$leftBox;Right=$rightBox;Swap=$swapButton;Detail=$detailBox;Countdown=$countdownCheck;CountdownWeekly=$countdownWeeklyCheck;Hint=$hint;Intro=$intro}
+    $controls = @{Page=$Page;Strip=$strip;Preview=$preview;Single=$singleRadio;Dual=$dualRadio;Left=$leftBox;Right=$rightBox;Swap=$swapButton;Detail=$detailBox;Countdown=$countdownCheck;CountdownWeekly=$countdownWeeklyCheck;CodexFiveHour=$codexFiveHourCheck;Hint=$hint;Intro=$intro}
     $Page.Tag = $controls
     $Page.Add_Resize({ param($eventSource,$eventData) Update-PillPreferencesLayout -Controls $eventSource.Tag })
     Update-PillPreferencesLayout -Controls $controls
@@ -6012,6 +6043,9 @@ function Update-PillPreferencesPage {
     $pill.CountdownWeekly.Enabled = $dual -and $countdownOn
     $weeklyOn = [bool]$script:State.settings.taskbarBadgeResetCountdownWeekly
     if ($pill.CountdownWeekly.Checked -ne $weeklyOn) { $pill.CountdownWeekly.Checked = $weeklyOn }
+    # Both layouts show the Codex windows, so this choice stays available with one provider too.
+    $codexFiveHourOn = [bool]$script:State.settings.taskbarBadgeCodexFiveHour
+    if ($pill.CodexFiveHour.Checked -ne $codexFiveHourOn) { $pill.CodexFiveHour.Checked = $codexFiveHourOn }
     $detailIndex = if ([string]$script:State.settings.taskbarBadgeDualDetail -eq 'tightest') { 1 } else { 0 }
     if (-not $pill.Detail.DroppedDown -and $pill.Detail.SelectedIndex -ne $detailIndex) { $pill.Detail.SelectedIndex = $detailIndex }
 
