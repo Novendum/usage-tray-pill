@@ -4,6 +4,16 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.13] - 2026-11-04
+
+### Changed
+
+- **Claude follows the account you use in Claude Desktop.** When Claude Desktop is signed in to another account than the Claude CLI that UTP asks, the pill shows the usage Claude Desktop records for its account. Claude Desktop updates it about every 15 minutes and keeps no reset times, so those values come without a clock; with the same account in both, nothing changes. Right after you switch accounts, the pill shows `--` until Claude Desktop reports the new account. The CLI source also falls back to Claude Desktop when it has no current answer.
+
+### Fixed
+
+- UTP finds Claude Desktop's usage history again in `%LOCALAPPDATA%\Claude-Data`, where current Claude Desktop builds keep it. A sample from the last 15-minute interval no longer turns into `--`.
+
 ## [0.1.0-rc.12] - 2026-10-24
 
 ### Added

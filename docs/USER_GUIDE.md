@@ -18,7 +18,7 @@ Keep `src/`, `assets/` and `scripts/` beside the start file. You do not need to 
 
 Use only the services you already have. Sign in with each provider's supported CLI or configure its optional connection in UTP. OpenCode Go, Qwen and the experimental Claude CLI source are off by default.
 
-See [provider setup](PROVIDERS.md). Missing values appear as `--`; cached values are marked. A small red dot on a provider's logo means it needs you: sign in again, add a new key or finish setup. The quick view says which. Resolve those before using **Refresh now**.
+See [provider setup](PROVIDERS.md). Switching accounts in Claude Desktop? The Claude side follows the account Claude Desktop uses, updated about every 15 minutes. Missing values appear as `--`; cached values are marked. A small red dot on a provider's logo means it needs you: sign in again, add a new key or finish setup. The quick view says which. Resolve those before using **Refresh now**.
 
 ## Notifications and updates
 
