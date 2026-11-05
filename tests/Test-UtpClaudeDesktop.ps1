@@ -44,6 +44,14 @@ try {
         })
         [pscustomobject]@{ source = 'claude-code-control'; available = (-not $ErrorCode); stale = $false; lastError = $ErrorCode; errorCode = $ErrorCode; lastCheckedAt = $now.ToString('o'); lastSuccessAt = $now.ToString('o'); items = $items } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $script:ClaudeControlUsagePath -Encoding UTF8
     }
+    function Test-QuickViewStatusFits {
+        # The quick view draws a provider status in a 170-pixel slot and cuts longer text off.
+        $status = [string](@(Get-QuickViewModel) | Where-Object Source -eq 'claude').Status
+        $font = New-Object System.Drawing.Font 'Segoe UI', 12, ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
+        try { $width = [System.Windows.Forms.TextRenderer]::MeasureText($status, $font, (New-Object System.Drawing.Size 1000, 40), ([System.Windows.Forms.TextFormatFlags]::SingleLine -bor [System.Windows.Forms.TextFormatFlags]::NoPadding)).Width }
+        finally { $font.Dispose() }
+        Check ($status -and $width -le 170) "The quick view status must fit its slot: '$status' is $width px"
+    }
     function Reset-ClaudeCaches { $script:ClaudeDesktopHistoryCache = $null; $script:ClaudeDesktopAccount = $null; $script:ClaudeCliAccountCache = $null }
 
     $script:State = New-DefaultState
@@ -64,7 +72,8 @@ try {
     Write-CliUsage
     $usage = Get-ClaudeUsageSnapshot
     Check ($usage.source -eq 'claude-desktop-plan-history' -and $usage.fiveHourRemainingPercent -eq 60 -and $usage.sevenDayRemainingPercent -eq 82) 'A Desktop account other than the CLI account must decide what the pill shows'
-    Check ((Get-ProviderStatusMessage -Source 'claude') -like 'Claude - From Claude Desktop, updated *') 'The overview must say the numbers come from Claude Desktop'
+    Check ((Get-ProviderStatusMessage -Source 'claude') -like 'Claude - Via Claude Desktop, *') 'The overview must say the numbers come from Claude Desktop'
+    Test-QuickViewStatusFits
     $pill = Get-TaskbarBadgeData -Source 'claude'
     Check ((@($pill.Items | ForEach-Object { "$($_.Label) $($_.Text)" }) -join ',') -eq '5h 60%,weekly 82%' -and @($pill.Items | Where-Object { $_.ResetsAt }).Count -eq 0) 'The pill must show the Desktop account without invented reset times'
 
@@ -95,7 +104,8 @@ try {
     Write-DesktopData $current @(New-Sample 5 40 18) $thirdAccount
     $usage = Get-ClaudeUsageSnapshot
     Check ($usage.source -eq 'claude-desktop-plan-history' -and [bool]$usage.pending -and $null -eq $usage.fiveHourRemainingPercent) 'Right after a switch the old account must not show'
-    Check ((Get-ProviderStatusMessage -Source 'claude') -eq 'Claude - Waiting for Claude Desktop to report this account' -and (Get-TaskbarBadgeData -Source 'claude').StatusText -eq 'Waiting for Claude Desktop') 'The wait must be explained'
+    Check ((Get-ProviderStatusMessage -Source 'claude') -eq 'Claude - Waiting for Claude Desktop' -and (Get-TaskbarBadgeData -Source 'claude').StatusText -eq 'Waiting for Claude Desktop') 'The wait must be explained'
+    Test-QuickViewStatusFits
     Write-DesktopData $current @((New-Sample 5 40 18), (New-Sample -1 12 9)) $thirdAccount
     Check ((Get-ClaudeUsageSnapshot).fiveHourRemainingPercent -eq 88) 'The first sample of the new account must show'
     Write-DesktopData $current @((New-Sample 5 40 18), (New-Sample -1 12 9)) $cliAccount

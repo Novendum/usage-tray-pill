@@ -3511,7 +3511,8 @@ function Get-ProviderStatusMessage {
         'qwen' { Get-QwenUsageSnapshot }
     }
     if ($null -eq $usage) { return "$name - No usage data yet" }
-    if ($Source -eq 'claude' -and [bool]$usage.pending) { return "$name - Waiting for Claude Desktop to report this account" }
+    # Short enough for the quick view's status slot.
+    if ($Source -eq 'claude' -and [bool]$usage.pending) { return "$name - Waiting for Claude Desktop" }
     if ([string]$usage.lastError -eq 'auth_expired') { return "$name - Session expired. Right-click > Set up $name to sign in again." }
     if ([bool]$usage.stale -and [bool]$usage.available) { return "$name - Cached values from $(Format-DisplayDate $usage.lastSuccessAt)" }
     if (-not [string]::IsNullOrWhiteSpace([string]$usage.lastError)) { return "$name - Unable to refresh. Right-click > Refresh now." }
@@ -3522,7 +3523,7 @@ function Get-ProviderStatusMessage {
         if ($Source -eq 'claude' -and -not $script:State.settings.claudeControlEnabled) { return "$name - Usage is out of date. Open Claude Code or Claude Desktop to update it." }
         return "$name - Usage is out of date. Right-click > Refresh now."
     }
-    if ($desktopSource) { return "$name - From Claude Desktop, updated $(Format-DisplayDate $usage.lastCheckedAt)" }
+    if ($desktopSource) { return "$name - Via Claude Desktop, $(Format-DisplayDate $usage.lastCheckedAt)" }
     return "$name - Updated $(Format-DisplayDate $usage.lastCheckedAt)"
 }
 
