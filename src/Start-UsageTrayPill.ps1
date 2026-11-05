@@ -146,7 +146,7 @@ if (-not ($RefreshLiveOnce -or $RefreshAntigravityOnce -or $RefreshOpenCodeGoOnc
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:AppName = "Usage Tray Pill"
-$script:AppVersion = "0.1.0-rc.12"
+$script:AppVersion = "0.1.0-rc.13"
 $script:DataDir = Join-Path $env:APPDATA "UsageTrayPill"
 $script:DataPath = Join-Path $script:DataDir "data.json"
 $script:CodexUsagePath = Join-Path $script:DataDir "codex-usage.json"
@@ -180,6 +180,11 @@ $script:ProviderRefreshErrors = @{}
 $script:CollectorProcess = $null
 $script:CollectorRestartAt = [datetime]::MinValue
 $script:UsageMonitor = $null
+# Claude Desktop records plan usage about every 15 minutes; parsed history, its signed-in account and the CLI account are cached.
+$script:ClaudeDesktopMaxAgeMinutes = 25
+$script:ClaudeDesktopHistoryCache = $null
+$script:ClaudeDesktopAccount = $null
+$script:ClaudeCliAccountCache = $null
 $script:CodexConnection = $null
 $script:BadgeToolTip = $null
 $script:BadgeTheme = 'Light'
@@ -1462,13 +1467,20 @@ function Test-ClaudeUsageNeedsDesktopFallback {
 }
 
 function Convert-ClaudeDesktopUsageHistory {
-    param([object]$History)
+    param(
+        [object]$History,
+        # Samples from before an account switch belong to the previous account.
+        [Nullable[DateTimeOffset]]$NotBefore = $null
+    )
 
-    $samples = @($History.samples | Sort-Object { [int64]$_.t })
+    # PowerShell unwraps the nullable value, so convert it once instead of reading .Value.
+    $floor = if ($null -ne $NotBefore) { ([DateTimeOffset]$NotBefore).ToUnixTimeMilliseconds() } else { [int64]::MinValue }
+    $samples = @($History.samples | Where-Object { [int64]$_.t -ge $floor } | Sort-Object { [int64]$_.t })
     if ($samples.Count -eq 0) { return $null }
     $latest = $samples[-1]
     $checkedAt = [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$latest.t).LocalDateTime
-    if (((Get-Date) - $checkedAt).TotalMinutes -gt 20) { return $null }
+    # Claude Desktop samples about every 15 minutes, so a sample stays current a little longer than that.
+    if (((Get-Date) - $checkedAt).TotalMinutes -gt $script:ClaudeDesktopMaxAgeMinutes) { return $null }
 
     $limits = @()
     foreach ($definition in @(
@@ -1507,17 +1519,75 @@ function Convert-ClaudeDesktopUsageHistory {
     }
 }
 
+function Get-ClaudeDesktopDataDirectories {
+    # Current Claude Desktop builds keep their data in %LOCALAPPDATA%\Claude-Data\claude_<publisher>;
+    # older packaged builds in LocalCache\Roaming\Claude, installer builds in %APPDATA%\Claude.
+    $directories = @(foreach ($data in @(Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'Claude-Data') -Directory -Filter 'claude_*' -ErrorAction SilentlyContinue)) { $data.FullName })
+    $directories += @(foreach ($package in @(Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'Packages') -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue)) { Join-Path $package.FullName 'LocalCache\Roaming\Claude' })
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) { $directories += Join-Path $env:APPDATA 'Claude' }
+    return @($directories | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
+}
+
+function Get-ClaudeCliAccountUuid {
+    # The account the Claude CLI is signed in to, read as an identifier from its settings file; never a credential.
+    $root = if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) { $env:CLAUDE_CONFIG_DIR } else { $env:USERPROFILE }
+    $path = Join-Path $root '.claude.json'
+    try {
+        $item = Get-Item -LiteralPath $path -ErrorAction Stop
+        $cache = $script:ClaudeCliAccountCache
+        if ($null -ne $cache -and $cache.Path -eq $path -and $cache.WriteTime -eq $item.LastWriteTimeUtc) { return $cache.Uuid }
+        # Windows PowerShell rejects this file when project paths differ only in case, so read the one field directly.
+        $text = [IO.File]::ReadAllText($path)
+        $start = $text.IndexOf('"oauthAccount"')
+        $uuid = ''
+        if ($start -ge 0) {
+            $match = [regex]::Match($text.Substring($start, [Math]::Min(8192, $text.Length - $start)), '"accountUuid"\s*:\s*"([0-9A-Fa-f-]{36})"')
+            if ($match.Success) { $uuid = $match.Groups[1].Value.ToLowerInvariant() }
+        }
+        $script:ClaudeCliAccountCache = @{ Path = $path; WriteTime = $item.LastWriteTimeUtc; Uuid = $uuid }
+        return $uuid
+    }
+    catch { return '' }
+}
+
 function Get-ClaudeDesktopUsageSnapshot {
-    $packagesRoot = Join-Path $env:LOCALAPPDATA "Packages"
-    $historyPath = Get-ChildItem -LiteralPath $packagesRoot -Directory -Filter "Claude_*" -ErrorAction SilentlyContinue |
-        ForEach-Object { Join-Path $_.FullName "LocalCache\Roaming\Claude\plan-usage-history.json" } |
+    $historyPath = @(Get-ClaudeDesktopDataDirectories) |
+        ForEach-Object { Join-Path $_ "plan-usage-history.json" } |
         Where-Object { Test-Path -LiteralPath $_ } |
         Sort-Object { (Get-Item -LiteralPath $_).LastWriteTime } -Descending |
         Select-Object -First 1 -Wait
     if ([string]::IsNullOrWhiteSpace([string]$historyPath)) { return $null }
     try {
-        $history = Get-Content -LiteralPath $historyPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        return Convert-ClaudeDesktopUsageHistory -History $history
+        $item = Get-Item -LiteralPath $historyPath -ErrorAction Stop
+        $cache = $script:ClaudeDesktopHistoryCache
+        if ($null -eq $cache -or $cache.Path -ne $historyPath -or $cache.WriteTime -ne $item.LastWriteTimeUtc) {
+            $history = Get-Content -LiteralPath $historyPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            # Only the last samples matter; keep them sorted so each refresh stays cheap.
+            $recent = [pscustomobject]@{ samples = @($history.samples | Sort-Object { [int64]$_.t } | Select-Object -Last 200) }
+            $cache = @{ Path = $historyPath; WriteTime = $item.LastWriteTimeUtc; History = $recent }
+            $script:ClaudeDesktopHistoryCache = $cache
+        }
+        # The account signed in to Claude Desktop: one identifier from its settings, no credentials.
+        $account = ''
+        $configPath = Join-Path (Split-Path -Parent $historyPath) 'config.json'
+        if (Test-Path -LiteralPath $configPath) {
+            $match = [regex]::Match([IO.File]::ReadAllText($configPath), '"lastKnownAccountUuid"\s*:\s*"([0-9A-Fa-f-]{36})"')
+            if ($match.Success) { $account = $match.Groups[1].Value.ToLowerInvariant() }
+        }
+        # After an account switch, wait for the first sample of the new account instead of showing the old one.
+        $known = $script:ClaudeDesktopAccount
+        if ($null -eq $known) { $known = @{ Uuid = $account; Since = $null } }
+        elseif ($known.Uuid -ne $account) { $known = @{ Uuid = $account; Since = [DateTimeOffset]::Now } }
+        $script:ClaudeDesktopAccount = $known
+        $usage = Convert-ClaudeDesktopUsageHistory -History $cache.History -NotBefore $known.Since
+        if ($null -eq $usage) {
+            # Desktop still records, but not yet for the account it switched to: report that account without values.
+            $latest = @($cache.History.samples)[-1]
+            if ($null -eq $latest -or ((Get-Date) - [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$latest.t).LocalDateTime).TotalMinutes -gt $script:ClaudeDesktopMaxAgeMinutes) { return $null }
+            $usage = [pscustomobject]@{ source = "claude-desktop-plan-history"; pending = $true; lastCheckedAt = ""; lastError = ""; modelName = ""; version = ""; fiveHourRemainingPercent = $null; fiveHourResetsAt = ""; sevenDayRemainingPercent = $null; sevenDayResetsAt = ""; limits = @() }
+        }
+        $usage | Add-Member -NotePropertyName accountUuid -NotePropertyValue $account -Force
+        return $usage
     }
     catch { return $null }
 }
@@ -1534,7 +1604,15 @@ function Get-ClaudeUsageSnapshot {
             $five=@($controlItems)|Where-Object key -eq 'five_hour'|Select-Object -First 1 -Wait
             $week=@($controlItems)|Where-Object key -eq 'seven_day'|Select-Object -First 1 -Wait
             $usage=[pscustomobject]@{source='claude-code-control';lastCheckedAt=$control.lastCheckedAt;lastError=$control.lastError;errorCode=$control.errorCode;lastSuccessAt=$control.lastSuccessAt;stale=[bool]$control.stale;available=[bool]$control.available;fiveHourRemainingPercent=$five.remainingPercent;fiveHourResetsAt=$five.resetsAt;sevenDayRemainingPercent=$week.remainingPercent;sevenDayResetsAt=$week.resetsAt;limits=@($controlItems);modelName='';version=''}
-        }catch{return $null}
+        }catch{$usage=$null}
+        # Claude Desktop may be signed in to another account than the CLI that UTP asks. While Desktop records
+        # current usage, the pill follows Desktop's account; percentages only, as Desktop keeps no reset times.
+        $desktopUsage = Get-ClaudeDesktopUsageSnapshot
+        if ($null -ne $desktopUsage) {
+            $cliAccount = Get-ClaudeCliAccountUuid
+            $otherAccount = $desktopUsage.accountUuid -and $cliAccount -and $desktopUsage.accountUuid -ne $cliAccount
+            if ($otherAccount -or (-not [bool]$desktopUsage.pending -and (Test-ClaudeUsageNeedsDesktopFallback $usage))) { $usage = $desktopUsage }
+        }
     }
     elseif (Test-Path -LiteralPath $script:ClaudeUsagePath) {
         try {
@@ -1553,7 +1631,8 @@ function Get-ClaudeUsageSnapshot {
     try {
         $cacheAllowed=[bool]$usage.stale -and (Test-UtpClaudeTransientFailure ([string]$usage.errorCode))
         $checked = Get-DateOrNull $(if($cacheAllowed){[string]$usage.lastSuccessAt}else{[string]$usage.lastCheckedAt})
-        $maxAge=if($cacheAllowed){10}else{15}
+        $desktopSource = [string]$usage.source -eq 'claude-desktop-plan-history'
+        $maxAge=if($desktopSource){$script:ClaudeDesktopMaxAgeMinutes}elseif($cacheAllowed){10}else{15}
         if ($null -eq $checked -or $checked -gt (Get-Date).AddMinutes(1) -or ((Get-Date) - $checked).TotalMinutes -gt $maxAge -or (-not [string]::IsNullOrWhiteSpace([string]$usage.lastError) -and -not $cacheAllowed)) {
             $usage.fiveHourRemainingPercent = $null
             $usage.sevenDayRemainingPercent = $null
@@ -1566,7 +1645,7 @@ function Get-ClaudeUsageSnapshot {
             $reset = Get-DateOrNull ([string]$limit.resetsAt)
             if ($null -ne $reset -and $reset -lt $now) { $limit.remainingPercent = $null }
             $observed = Get-DateOrNull ([string]$limit.observedAt)
-            if ($null -ne $observed -and ($observed -gt $now.AddMinutes(1) -or ($now - $observed).TotalMinutes -gt 15)) { $limit.remainingPercent = $null }
+            if ($null -ne $observed -and ($observed -gt $now.AddMinutes(1) -or ($now - $observed).TotalMinutes -gt $maxAge)) { $limit.remainingPercent = $null }
             if ($limit.key -eq 'five_hour') { $usage.fiveHourRemainingPercent = $limit.remainingPercent }
             if ($limit.key -eq 'seven_day') { $usage.sevenDayRemainingPercent = $limit.remainingPercent }
         }
@@ -1931,7 +2010,7 @@ function Get-TaskbarBadgeProviderData {
 
         $cached=[bool]$usage.stale -and @($items|Where-Object {$_.Text -ne '--'}).Count -gt 0
         if($cached){$items += [pscustomobject]@{Label='cache';Text='';Color=$neutralColor}}
-        $status=if($cached){'Cached '+(Get-DateOrNull $usage.lastSuccessAt).ToString('HH:mm')}elseif(@($items|Where-Object {$_.Text -ne '--'}).Count -gt 0){'Remaining allowance'}elseif(-not $script:State.settings.claudeControlEnabled){'Waiting for statusline data'}elseif($usage.errorCode -in @('auth_required','unsupported_auth_context','setup_required')){'CLI sign-in / setup required'}elseif((Get-ProviderRetrySeconds ([string]$usage.errorCode) 1) -lt 0){'Collection paused; check Details'}else{'Usage unavailable; retrying'}
+        $status=if($cached){'Cached '+(Get-DateOrNull $usage.lastSuccessAt).ToString('HH:mm')}elseif(@($items|Where-Object {$_.Text -ne '--'}).Count -gt 0){'Remaining allowance'}elseif([bool]$usage.pending){'Waiting for Claude Desktop'}elseif(-not $script:State.settings.claudeControlEnabled){'Waiting for statusline data'}elseif($usage.errorCode -in @('auth_required','unsupported_auth_context','setup_required')){'CLI sign-in / setup required'}elseif((Get-ProviderRetrySeconds ([string]$usage.errorCode) 1) -lt 0){'Collection paused; check Details'}else{'Usage unavailable; retrying'}
         return [pscustomobject]@{
             Cached = $cached
             StatusText = $status
@@ -3432,15 +3511,18 @@ function Get-ProviderStatusMessage {
         'qwen' { Get-QwenUsageSnapshot }
     }
     if ($null -eq $usage) { return "$name - No usage data yet" }
+    if ($Source -eq 'claude' -and [bool]$usage.pending) { return "$name - Waiting for Claude Desktop to report this account" }
     if ([string]$usage.lastError -eq 'auth_expired') { return "$name - Session expired. Right-click > Set up $name to sign in again." }
     if ([bool]$usage.stale -and [bool]$usage.available) { return "$name - Cached values from $(Format-DisplayDate $usage.lastSuccessAt)" }
     if (-not [string]::IsNullOrWhiteSpace([string]$usage.lastError)) { return "$name - Unable to refresh. Right-click > Refresh now." }
     $checked = Get-DateOrNull ([string]$usage.lastCheckedAt)
-    $maxAge = if ($Source -eq 'antigravity') { 5 } else { 15 }
+    $desktopSource = $Source -eq 'claude' -and [string]$usage.source -eq 'claude-desktop-plan-history'
+    $maxAge = if ($Source -eq 'antigravity') { 5 } elseif ($desktopSource) { $script:ClaudeDesktopMaxAgeMinutes } else { 15 }
     if ($null -eq $checked -or ((Get-Date) - $checked).TotalMinutes -gt $maxAge) {
         if ($Source -eq 'claude' -and -not $script:State.settings.claudeControlEnabled) { return "$name - Usage is out of date. Open Claude Code or Claude Desktop to update it." }
         return "$name - Usage is out of date. Right-click > Refresh now."
     }
+    if ($desktopSource) { return "$name - From Claude Desktop, updated $(Format-DisplayDate $usage.lastCheckedAt)" }
     return "$name - Updated $(Format-DisplayDate $usage.lastCheckedAt)"
 }
 
@@ -7071,8 +7153,7 @@ function Start-UsageMonitoring {
     Ensure-DataDirectory
     if(-not ('UtpUsageFileMonitor' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'UsageFileMonitor.cs')}
     $script:UsageMonitor=New-Object UtpUsageFileMonitor $script:DataDir
-    foreach($package in @(Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'Packages') -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue)) {
-        $directory=Join-Path $package.FullName 'LocalCache\Roaming\Claude'
+    foreach($directory in @(Get-ClaudeDesktopDataDirectories)) {
         $script:UsageMonitor.Watch($directory,'plan-usage-history.json')
     }
 }

@@ -29,12 +29,13 @@ Depending on enabled features, UTP may read:
 - the Windows process list to detect ChatGPT, Codex, Claude, Antigravity, fullscreen applications, and UTP-owned helpers;
 - local ChatGPT/Codex installation paths to find an application icon;
 - Claude Code statusline JSON sent directly to the configured UTP script;
-- Claude Desktop's local `plan-usage-history.json` cache.
+- Claude Desktop's local `plan-usage-history.json` cache, and the signed-in account's identifier (`lastKnownAccountUuid`) in Claude Desktop's `config.json`;
+- the signed-in account's identifier (`oauthAccount.accountUuid`) in the Claude CLI's `.claude.json`, to tell whether Claude Desktop and the CLI use the same account.
 - installed CLI executable paths, versions, and bounded command output for supported external quota adapters;
 - UTP's own DPAPI-encrypted OpenCode Go API key after the user explicitly saves it;
 - UTP's own DPAPI-encrypted QwenCloud dashboard credential after the user explicitly saves it.
 
-UTP does not discover credentials in Claude, OpenCode, Qwen, or browser-owned storage. Its OpenCode key is explicitly supplied through UTP or its dedicated environment variable. Provider CLIs manage their own sign-in. The Antigravity adapter no longer reads process CSRF values or local language-server ports.
+UTP does not discover credentials in Claude, OpenCode, Qwen, or browser-owned storage; from Claude's settings files it reads only the account identifiers above, never a token. Its OpenCode key is explicitly supplied through UTP or its dedicated environment variable. Provider CLIs manage their own sign-in. The Antigravity adapter no longer reads process CSRF values or local language-server ports.
 
 `UsageFileMonitor.cs` watches UTP usage caches and the configured Claude Desktop usage-history file. Watcher callbacks report file changes; the UI reads normalized quota data without sending file contents elsewhere.
 
