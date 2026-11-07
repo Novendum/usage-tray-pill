@@ -14,6 +14,8 @@ function Show-MainWindow { [void]$script:Actions.Add('overview') }
 function Show-OpenCodeGoSetupDialog { [void]$script:Actions.Add('setup-opencode') }
 function Show-QwenSetupDialog { [void]$script:Actions.Add('setup-qwen') }
 function Show-UtpMenu { [void]$script:Actions.Add('menu') }
+# Never open Claude's real sign-in window from a test.
+function Start-ClaudeSignIn { [void]$script:Actions.Add('sign-in'); return $true }
 $script:TestShift = $false
 function Test-UtpMenuModifier { return $script:TestShift }
 function New-ClaudeSnapshot {
@@ -109,7 +111,7 @@ $script:BadgeTheme = 'Light'
 
 # Actions close the panel first and open the matching place.
 foreach ($action in @('refresh', 'overview', 'setup:opencodego', 'setup:qwen', 'setup:claude', 'menu')) { Invoke-QuickPanelAction -Action $action }
-Check (($script:Actions -join ',') -eq 'refresh,overview,setup-opencode,setup-qwen,overview,menu') 'Each quick panel action must open the matching place'
+Check (($script:Actions -join ',') -eq 'refresh,overview,setup-opencode,setup-qwen,sign-in,menu') 'Each quick panel action must open the matching place; an expired Claude sign-in starts a new one'
 
 # Position: above the pill on a bottom taskbar, below it otherwise, always inside the work area.
 $work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea

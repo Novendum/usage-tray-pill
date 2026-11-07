@@ -35,7 +35,7 @@ Depending on enabled features, UTP may read:
 - UTP's own DPAPI-encrypted OpenCode Go API key after the user explicitly saves it;
 - UTP's own DPAPI-encrypted QwenCloud dashboard credential after the user explicitly saves it.
 
-UTP does not discover credentials in Claude, OpenCode, Qwen, or browser-owned storage; from Claude's settings files it reads only the account identifiers above, never a token. Its OpenCode key is explicitly supplied through UTP or its dedicated environment variable. Provider CLIs manage their own sign-in. The Antigravity adapter no longer reads process CSRF values or local language-server ports.
+UTP does not discover credentials in Claude, OpenCode, Qwen, or browser-owned storage; from Claude's settings files it reads only the account identifiers above, never a token. Its OpenCode key is explicitly supplied through UTP or its dedicated environment variable. Provider CLIs manage their own sign-in; when you click to sign in to Claude, UTP only starts the Claude CLI's own sign-in window and never reads or passes credentials. The Antigravity adapter no longer reads process CSRF values or local language-server ports.
 
 `UsageFileMonitor.cs` watches UTP usage caches and the configured Claude Desktop usage-history file. Watcher callbacks report file changes; the UI reads normalized quota data without sending file contents elsewhere.
 

@@ -146,7 +146,7 @@ if (-not ($RefreshLiveOnce -or $RefreshAntigravityOnce -or $RefreshOpenCodeGoOnc
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:AppName = "Usage Tray Pill"
-$script:AppVersion = "0.1.0-rc.13"
+$script:AppVersion = "0.1.0-rc.14"
 $script:DataDir = Join-Path $env:APPDATA "UsageTrayPill"
 $script:DataPath = Join-Path $script:DataDir "data.json"
 $script:CodexUsagePath = Join-Path $script:DataDir "codex-usage.json"
@@ -161,6 +161,12 @@ $script:ClaudeKeeperScriptPath = Join-Path $PSScriptRoot "Start-ClaudeUsageKeepe
 $script:ClaudeKeeperCooldownPath = Join-Path $script:DataDir "claude-keeper-cooldown.json"
 $script:ClaudeUsageUpdaterPath = Join-Path $PSScriptRoot "Update-ClaudeUsageFromStatusline.ps1"
 $script:NotifyIcon = $null
+# What a click on the latest balloon does, and the state of UTP's Claude sign-in prompt.
+$script:NotificationAction = ''
+$script:ClaudeSignInProcess = $null
+$script:ClaudeSignInPrompted = $false
+# Set when a sign-in window closed: UTP reports the first Claude answer after that moment.
+$script:ClaudeSignInResultSince = $null
 $script:TrayIconSignature = ""
 $script:TrayTooltipText = ""
 $script:TrayMenuOpen = $false
@@ -180,6 +186,8 @@ $script:ProviderRefreshErrors = @{}
 $script:CollectorProcess = $null
 $script:CollectorRestartAt = [datetime]::MinValue
 $script:UsageMonitor = $null
+$script:ClaudeKeeperStopChecked = $false
+$script:PillPageFilled = $false
 # Claude Desktop records plan usage about every 15 minutes; parsed history, its signed-in account and the CLI account are cached.
 $script:ClaudeDesktopMaxAgeMinutes = 25
 $script:ClaudeDesktopHistoryCache = $null
@@ -908,13 +916,11 @@ function Test-ClaudeKeeperProcess {
 }
 
 function Get-ClaudeCodeProcesses {
+    # The image path names the package; a WMI query for every command line takes about half a second.
     try {
         return @(
-            Get-CimInstance Win32_Process -ErrorAction Stop |
-                Where-Object {
-                    $_.Name -ieq "claude.exe" -and
-                    [string]$_.CommandLine -match "@anthropic-ai[\\/]+claude-code"
-                }
+            Get-Process -Name claude -ErrorAction SilentlyContinue |
+                Where-Object { [string]$_.Path -match "@anthropic-ai[\\/]+claude-code" }
         )
     }
     catch {
@@ -1086,10 +1092,13 @@ function Stop-ClaudeUsageKeeper {
 
 function Ensure-ClaudeUsageKeeper {
     if ([bool]$script:State.settings.keepClaudeCodeAlive) {
+        $script:ClaudeKeeperStopChecked = $false
         [void](Start-ClaudeUsageKeeper)
     }
-    else {
+    elseif (-not $script:ClaudeKeeperStopChecked) {
+        # Searching all processes takes about half a second; with the keeper off, once after start or switch-off is enough.
         Stop-ClaudeUsageKeeper
+        $script:ClaudeKeeperStopChecked = $true
     }
 }
 
@@ -1285,7 +1294,7 @@ function Set-QwenEnabled {
     Save-State
     if(-not $Enabled){Stop-QwenUsageRefresh}else{Start-QwenUsageRefresh}
     Refresh-Tray
-    if($null -ne $script:RefreshMainWindow){& $script:RefreshMainWindow}
+    if($null -ne $script:RefreshMainWindow){& $script:RefreshMainWindow -SkipTray}
 }
 
 function Update-CodexBucketChoices {
@@ -1563,7 +1572,7 @@ function Get-ClaudeDesktopUsageSnapshot {
         if ($null -eq $cache -or $cache.Path -ne $historyPath -or $cache.WriteTime -ne $item.LastWriteTimeUtc) {
             $history = Get-Content -LiteralPath $historyPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
             # Only the last samples matter; keep them sorted so each refresh stays cheap.
-            $recent = [pscustomobject]@{ samples = @($history.samples | Sort-Object { [int64]$_.t } | Select-Object -Last 200) }
+            $recent = [pscustomobject]@{ samples = @($history.samples | Sort-Object { [int64]$_.t } | Select-Object -Last 20) }
             $cache = @{ Path = $historyPath; WriteTime = $item.LastWriteTimeUtc; History = $recent }
             $script:ClaudeDesktopHistoryCache = $cache
         }
@@ -2289,6 +2298,8 @@ function Get-TaskbarBadgeDividerColor {
 }
 
 $script:ProviderAttentionCodes = @('auth_expired','auth_required','api_key_required','subscription_required','setup_required','credential_unreadable','unsupported_auth_context','access_denied')
+# Claude codes that a new sign-in of the Claude CLI fixes; setup_required needs a newer CLI instead.
+$script:ClaudeSignInCodes = @('auth_required','unsupported_auth_context','auth_expired')
 
 function Get-ProviderAttentionCode {
     param([string]$Source)
@@ -4151,13 +4162,17 @@ function Limit-Text {
 }
 
 function Get-StatusSnapshot {
+    # Only the tray menu shows whether Claude Code runs; checking every process costs time on each refresh.
+    param([switch]$IncludeClaudeProcesses)
+
     $activeResets = @(Get-ActiveResets)
     $effectiveResetCount = Get-EffectiveResetCount
     $nextReset = Get-NextReset
     $nextLimit = Get-NextLimit
     $codexRunning = Test-CodexRunning
-    $claudeCodeRunning = Test-ClaudeCodeRunning
-    $claudeKeeperRunning = Test-ClaudeKeeperRunning
+    $claudeCodeRunning = if ($IncludeClaudeProcesses) { Test-ClaudeCodeRunning } else { $null }
+    # Nothing shows whether a keeper runs; the keeper logic asks for itself when the keeper is on.
+    $claudeKeeperRunning = $null
     $level = "none"
 
     if ($effectiveResetCount -gt 0) {
@@ -4539,10 +4554,86 @@ function Read-UsageNotificationState {
 }
 
 function Send-UtpNotification {
-    param([string]$Title, [string]$Text)
+    param([string]$Title, [string]$Text, [string]$Action = '')
     if ($null -eq $script:NotifyIcon) { return }
+    # Windows shows one balloon at a time, so a newer balloon also replaces what a click does.
+    $script:NotificationAction = $Action
     try { $script:NotifyIcon.ShowBalloonTip(10000, $Title, $Text, [System.Windows.Forms.ToolTipIcon]::None) } catch {
     }
+}
+
+function Invoke-UtpNotificationAction {
+    $action = [string]$script:NotificationAction
+    $script:NotificationAction = ''
+    if ($action -eq 'claude-sign-in') { [void](Start-ClaudeSignIn) }
+}
+
+function Test-ClaudeSignInNeeded {
+    return (Get-ProviderAttentionCode -Source 'claude') -in $script:ClaudeSignInCodes
+}
+
+function New-ClaudeSignInStartInfo {
+    param([string]$FilePath)
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = $FilePath
+    $info.Arguments = 'auth login --claudeai'
+    # Its own console window: Claude's sign-in opens the browser and may ask something there.
+    $info.UseShellExecute = $true
+    $info.WorkingDirectory = [IO.Path]::GetTempPath()
+    return $info
+}
+
+function Start-ClaudeSignInProcess {
+    param([string]$FilePath)
+    return [System.Diagnostics.Process]::Start((New-ClaudeSignInStartInfo -FilePath $FilePath))
+}
+
+function Start-ClaudeSignIn {
+    # The Claude CLI signs in and stores its credentials itself; UTP only starts it and waits for it to close.
+    if ($null -ne $script:ClaudeSignInProcess) { return $true }
+    $cli = Resolve-UtpClaudeUsageCli
+    if ([string]::IsNullOrEmpty($cli)) { Show-MainWindow; return $false }
+    try { $script:ClaudeSignInProcess = Start-ClaudeSignInProcess -FilePath $cli }
+    catch { Show-MainWindow; return $false }
+    return $true
+}
+
+function Complete-ClaudeSignIn {
+    # When the sign-in window closes, ask Claude again right away instead of waiting for the paused schedule.
+    $process = $script:ClaudeSignInProcess
+    if ($null -eq $process) { return }
+    try { if (-not $process.HasExited) { return } } catch { }
+    $script:ClaudeSignInProcess = $null
+    try { $process.Dispose() } catch { }
+    # Judge by Claude's next answer, not the exit code: a window closed by hand after signing in still counts.
+    $script:ClaudeSignInResultSince = Get-Date
+    Start-ProviderUsageRefresh -Source claude
+}
+
+function Update-ClaudeSignInResult {
+    # After a sign-in, say once whether Claude answers again, with the usage that is back.
+    $since = $script:ClaudeSignInResultSince
+    if ($null -eq $since -or $script:ProviderRefreshes.ContainsKey('claude')) { return }
+    if (((Get-Date) - $since).TotalMinutes -gt 2) { $script:ClaudeSignInResultSince = $null; return }
+    $checked = $null
+    try { $checked = Get-DateOrNull ([string](Get-Content -LiteralPath $script:ClaudeControlUsagePath -Raw -ErrorAction Stop | ConvertFrom-Json).lastCheckedAt) } catch { }
+    if ($null -eq $checked -or $checked -lt $since) { return }
+    $script:ClaudeSignInResultSince = $null
+    if (Test-ClaudeSignInNeeded) {
+        Send-UtpNotification -Title 'Claude sign-in did not finish' -Text 'Click here to try again.' -Action 'claude-sign-in'
+        return
+    }
+    $windows = @((Get-TaskbarBadgeData -Source 'claude' -AllWindows).Items | Where-Object { $_.Label -ne 'cache' -and $_.Text -ne '--' })
+    $usage = if ($windows.Count -gt 0) { 'Your Claude usage is back: ' + ((@($windows | ForEach-Object { (Get-QuickViewWindowName $_.Label).ToLowerInvariant() + ' ' + $_.Text + ' left' })) -join ', ') + '.' } else { 'UTP shows your Claude usage as soon as Claude reports it.' }
+    Send-UtpNotification -Title 'Signed in to Claude' -Text $usage
+}
+
+function Update-ClaudeSignInPrompt {
+    # One balloon per sign-in problem; another only after Claude worked again in between.
+    if (-not (Test-ClaudeSignInNeeded)) { $script:ClaudeSignInPrompted = $false; return }
+    if ($script:ClaudeSignInPrompted -or $null -ne $script:ClaudeSignInProcess -or $null -ne $script:ClaudeSignInResultSince) { return }
+    $script:ClaudeSignInPrompted = $true
+    Send-UtpNotification -Title 'Claude needs a new sign-in' -Text 'Click here to sign in. UTP checks your Claude usage again right after.' -Action 'claude-sign-in'
 }
 
 function Update-UsageNotifications {
@@ -4598,6 +4689,7 @@ function Refresh-Tray {
     }
     Refresh-TaskbarBadge
     Update-UsageNotifications
+    Update-ClaudeSignInPrompt
 }
 
 function Show-UtpUpdateDialog {
@@ -5353,6 +5445,9 @@ function Exit-TrayApp {
 }
 
 function Update-MainWindow {
+    # SkipTray: the caller refreshed the tray and pill just before.
+    param([switch]$SkipTray)
+
     # Decide the theme first: list rows and provider icons below read the palette directly.
     $script:OverviewTheme = Get-UtpAppTheme
     $form = $script:MainForm
@@ -5372,7 +5467,12 @@ function Update-MainWindow {
         if($null -ne $script:MainWindowControls.NotifyLow){$script:MainWindowControls.NotifyLow.Checked=[bool]$script:State.settings.notifyLowAllowance;$script:MainWindowControls.NotifyReset.Checked=[bool]$script:State.settings.notifyReset}
         if($null -ne $script:MainWindowControls.ClaudeControl){$script:MainWindowControls.ClaudeControl.Checked=[bool]$script:State.settings.claudeControlEnabled}
         Update-CodexBucketChoices
-        Update-PillPreferencesPage
+        # The Pill tab renders a preview and asks every provider twice; it catches up when it is opened.
+        $pillPage = if ($null -ne $script:MainWindowControls.Pill) { $script:MainWindowControls.Pill.Page } else { $null }
+        if ($null -eq $pillPage -or $null -eq $script:MainWindowControls.Tabs -or $script:MainWindowControls.Tabs.SelectedTab -eq $pillPage -or -not $script:PillPageFilled) {
+            Update-PillPreferencesPage
+            $script:PillPageFilled = $true
+        }
         $refreshing = $script:ProviderRefreshes.Count -gt 0
         $refreshLiveButton.Enabled = -not $refreshing
         $refreshLiveButton.Text = $(if ($refreshing) { "Refreshing..." } else { "Refresh now" })
@@ -5533,7 +5633,7 @@ function Update-MainWindow {
         # Re-apply the theme: refreshes assign light-palette colours, and Windows may have switched mode.
         Set-UtpWindowTheme -Form $form
         if ($null -ne $script:MainWindowControls.Tabs) { Update-TabStripFill -Tabs $script:MainWindowControls.Tabs }
-        Refresh-Tray
+        if (-not $SkipTray) { Refresh-Tray }
 }
 
 function Update-TabStripFill {
@@ -5921,7 +6021,7 @@ function Invoke-QuickPanelAction {
         '^overview$' { Show-MainWindow }
         '^setup:opencodego$' { [void](Show-OpenCodeGoSetupDialog) }
         '^setup:qwen$' { [void](Show-QwenSetupDialog) }
-        '^setup:claude$' { Show-MainWindow }
+        '^setup:claude$' { if (Test-ClaudeSignInNeeded) { [void](Start-ClaudeSignIn) } else { Show-MainWindow } }
         '^menu$' { Show-UtpMenu }
     }
 }
@@ -6278,6 +6378,8 @@ function Show-MainWindow {
 
     $form = New-Object System.Windows.Forms.Form
     $script:MainForm = $form
+    # New controls: the Pill tab needs its first fill.
+    $script:PillPageFilled = $false
     $form.Text = "Usage Tray Pill"
     $form.StartPosition = "CenterScreen"
     $form.ClientSize = New-Object System.Drawing.Size 1040, 760
@@ -6472,7 +6574,10 @@ function Show-MainWindow {
     })
     $form.Controls.Add($tabs)
     $tabs.Add_Resize({ param($eventSource,$eventData) Update-TabStripFill -Tabs $eventSource })
-    $tabs.Add_SelectedIndexChanged({ param($eventSource,$eventData) Update-TabStripFill -Tabs $eventSource })
+    $tabs.Add_SelectedIndexChanged({ param($eventSource,$eventData)
+        Update-TabStripFill -Tabs $eventSource
+        if ($null -ne $script:MainWindowControls -and $null -ne $script:MainWindowControls.Pill -and $eventSource.SelectedTab -eq $script:MainWindowControls.Pill.Page) { Update-PillPreferencesPage }
+    })
 
     $liveTab = New-Object System.Windows.Forms.TabPage
     $liveTab.Text = "Live usage"
@@ -6770,7 +6875,7 @@ function Show-MainWindow {
     $hideButton.Location = New-Object System.Drawing.Point 820,716
     $exitButton.Location = New-Object System.Drawing.Point 920,716
     $script:MainWindowControls = @{Tabs=$tabs;NotifyLow=$notifyLowCheck;NotifyReset=$notifyResetCheck;NotifyThreshold=$notifyThresholdBox;Pill=$pillControls;FullscreenHide=$fullscreenCheck;ClaudeControl=$claudeControlCheck;QwenEnabled=$qwenEnabledCheck;CodexBucket=$codexBucketBox;Rows=$usageRows;Plan=$planBox;Resets=$resetsList;Limits=$limitsList;Live=$liveList;Header=$header;Status=$liveStatusLabel;Refresh=$refreshLiveButton}
-    $script:RefreshMainWindow = { Update-MainWindow }
+    $script:RefreshMainWindow = { param([switch]$SkipTray) Update-MainWindow -SkipTray:$SkipTray }
 
 
     $savePlanButton.Add_Click({
@@ -6932,6 +7037,7 @@ function Show-MainWindow {
 
     $form.Add_FormClosed({
         $script:RefreshMainWindow = $null
+        $script:PillPageFilled = $false
     })
 
     foreach ($page in @($liveTab, $limitsTab, $resetsTab, $detailsTab)) {
@@ -7100,7 +7206,7 @@ function New-TrayMenu {
         $script:TrayMenuOpen = $true
         $refreshItem.Enabled = $script:ProviderRefreshes.Count -eq 0
         $refreshItem.Text = $(if ($refreshItem.Enabled) { "Refresh now" } else { "Refreshing..." })
-        $snapshot = Get-StatusSnapshot
+        $snapshot = Get-StatusSnapshot -IncludeClaudeProcesses
         $badgeItem.Checked = [bool]$script:State.settings.showTaskbarBadge
         $claudeKeeperItem.Checked = [bool]$script:State.settings.keepClaudeCodeAlive
         $nextText = "no active reset"
@@ -7263,7 +7369,7 @@ function Update-ProviderRefreshProcessState {
         $changed=$true
     }
     Start-UsageCollection
-    if($changed){Refresh-Tray;if($null -ne $script:RefreshMainWindow){& $script:RefreshMainWindow}}
+    if($changed){Refresh-Tray;if($null -ne $script:RefreshMainWindow){& $script:RefreshMainWindow -SkipTray}}
 }
 
 function Stop-ProviderUsageRefresh {
@@ -7276,7 +7382,7 @@ function Stop-ProviderUsageRefresh {
 function Start-AllUsageRefresh {
     foreach ($source in @('codex','claude','antigravity','opencodego','qwen')) { Start-ProviderUsageRefresh -Source $source }
     Refresh-Tray
-    if ($null -ne $script:RefreshMainWindow) { & $script:RefreshMainWindow }
+    if ($null -ne $script:RefreshMainWindow) { & $script:RefreshMainWindow -SkipTray }
 }
 
 function Start-OpenCodeGoUsageRefresh { Start-ProviderUsageRefresh -Source opencodego }
@@ -7316,6 +7422,7 @@ function Start-TrayApp {
             Show-MainWindow
         }
     })
+    $script:NotifyIcon.Add_BalloonTipClicked({ Invoke-UtpNotificationAction })
     $script:NotifyIcon.Add_MouseDoubleClick({
         param($eventSource, $eventData)
         if ($eventData.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
@@ -7330,7 +7437,7 @@ function Start-TrayApp {
     $timer.Add_Tick({
         Refresh-Tray
         if ($null -ne $script:RefreshMainWindow) {
-            & $script:RefreshMainWindow
+            & $script:RefreshMainWindow -SkipTray
         }
     })
     $timer.Start()
@@ -7339,6 +7446,8 @@ function Start-TrayApp {
     $badgeKeepAliveTimer.Interval = 500
     $badgeKeepAliveTimer.Add_Tick({
         Update-ProviderRefreshProcessState
+        Complete-ClaudeSignIn
+        Update-ClaudeSignInResult
         if ($null -ne $script:UsageMonitor -and $script:UsageMonitor.ConsumeChanges()) {
             foreach($name in $script:UsageMonitor.TakeChangedFiles()) {
                 foreach($source in @('codex','claude','antigravity','opencodego','qwen')) {
@@ -7347,7 +7456,7 @@ function Start-TrayApp {
             }
             Sync-CodexUsageSnapshot
             Refresh-Tray
-            if ($null -ne $script:RefreshMainWindow) { & $script:RefreshMainWindow }
+            if ($null -ne $script:RefreshMainWindow) { & $script:RefreshMainWindow -SkipTray }
         }
         if ($script:PendingStateSave -and -not $script:BadgeAnimating) {
             try { Save-State; $script:PendingStateSave = $false } catch { }
