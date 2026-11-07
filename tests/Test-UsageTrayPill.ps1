@@ -5,6 +5,7 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "Test-ProcessHelpers.ps1")
 
 # All child tests inherit disposable state and synthetic-only provider credentials.
+$suiteStartedAt = Get-Date
 $testEnvironmentRoot = Join-Path ([IO.Path]::GetTempPath()) ('UtpSuite-' + [guid]::NewGuid().ToString('N'))
 $savedEnvironment = @{}
 foreach ($name in @('APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'OPENCODE_GO_API_KEY', 'QWEN_TOKEN_PLAN_COOKIE')) {
@@ -535,10 +536,14 @@ if ($LASTEXITCODE -ne 0 -or ($usageOutput -notcontains "Selftest OK")) {
     throw "Claude usage updater selftest failed."
 }
 
-foreach ($regressionScript in @('Test-UtpClaudeCache.ps1', 'Test-UtpClaudeDesktop.ps1', 'Test-UtpVisibility.ps1', 'Test-UtpReliability.ps1', 'Test-UtpInteractions.ps1', 'Test-UtpPillRendering.ps1', 'Test-UtpDualPill.ps1', 'Test-OpenCodeGoApi.ps1', 'Test-ExternalUsageAdapters.ps1', 'Test-UtpCollector.ps1', 'Test-UtpRefreshRecovery.ps1', 'Test-UtpPresentationRecovery.ps1', 'Test-UtpProviderRecovery.ps1', 'Test-UtpProcessOwnership.ps1', 'Test-UtpAgyUpdater.ps1', 'Test-UtpInstallationLayout.ps1', 'Test-UtpUpdater.ps1', 'Test-UtpNotifications.ps1', 'Test-UtpQuickPanel.ps1', 'Test-UtpTheme.ps1', 'Test-UtpReleasePackage.ps1')) {
+foreach ($regressionScript in @('Test-UtpClaudeCache.ps1', 'Test-UtpClaudeDesktop.ps1', 'Test-UtpClaudeSignIn.ps1', 'Test-UtpResponsiveness.ps1', 'Test-UtpVisibility.ps1', 'Test-UtpReliability.ps1', 'Test-UtpInteractions.ps1', 'Test-UtpPillRendering.ps1', 'Test-UtpDualPill.ps1', 'Test-OpenCodeGoApi.ps1', 'Test-ExternalUsageAdapters.ps1', 'Test-UtpCollector.ps1', 'Test-UtpRefreshRecovery.ps1', 'Test-UtpPresentationRecovery.ps1', 'Test-UtpProviderRecovery.ps1', 'Test-UtpProcessOwnership.ps1', 'Test-UtpAgyUpdater.ps1', 'Test-UtpInstallationLayout.ps1', 'Test-UtpUpdater.ps1', 'Test-UtpNotifications.ps1', 'Test-UtpQuickPanel.ps1', 'Test-UtpTheme.ps1', 'Test-UtpReleasePackage.ps1')) {
     & $windowsPowerShellPath -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $regressionScript)
     if ($LASTEXITCODE -ne 0) { throw "$regressionScript failed." }
 }
+# Tests must never open Claude's real sign-in window: close any that a test started and fail.
+$strayClaudeSignIns = @(Get-CimInstance Win32_Process -Filter "Name='claude.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'auth\s+login' -and $_.CreationDate -ge $suiteStartedAt })
+foreach ($stray in $strayClaudeSignIns) { Stop-Process -Id $stray.ProcessId -ErrorAction SilentlyContinue }
+if ($strayClaudeSignIns.Count -gt 0) { throw 'A test started a real Claude sign-in window.' }
 Write-Output 'All UTP tests OK'
 
 }

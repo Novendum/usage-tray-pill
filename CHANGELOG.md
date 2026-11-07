@@ -4,6 +4,16 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.14] - 2026-11-07
+
+### Added
+
+- **Sign in to Claude from UTP.** When the Claude CLI source needs a new sign-in, UTP shows one notification. Click it, or **Sign-in required** in the quick view, and UTP opens Claude's own sign-in (`claude auth login`) in a window; your browser does the rest. UTP never sees your credentials. As soon as the window closes, UTP checks Claude again and confirms with a notification that shows your usage, or offers another try if Claude still asks for a sign-in. A new sign-in notification follows only after Claude worked in between.
+
+### Changed
+
+- **Much more responsive.** Every refresh asked Windows for the command line of every running process, twice, on the UI thread; with many processes that froze the pill and the overview for one to two seconds, and with the keeper off it still happened every 30 seconds. Now only the tray menu checks for Claude Code, from the fast process list, and the keeper looks for leftovers once after it is switched off. An overview refresh takes about 0.3 instead of 2.2 seconds, the tray menu opens about ten times faster, the tray no longer refreshes twice in a row, and the Pill tab only redraws while it is open.
+
 ## [0.1.0-rc.13] - 2026-11-04
 
 ### Changed
