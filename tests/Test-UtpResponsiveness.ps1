@@ -14,8 +14,7 @@ function Test-ClaudeKeeperRunning { $script:KeeperChecks++; return $false }
 function Test-CodexRunning { return $false }
 [void](Get-StatusSnapshot)
 Check ($script:CodeChecks -eq 0 -and $script:KeeperChecks -eq 0) 'A refresh must not search the process list for Claude'
-$menu = Get-StatusSnapshot -IncludeClaudeProcesses
-Check ($script:CodeChecks -eq 1 -and $script:KeeperChecks -eq 0 -and $menu.ClaudeCodeRunning -eq $false) 'Only the tray menu may ask whether Claude Code runs'
+Check (${function:New-TrayMenu}.ToString() -notmatch 'Get-StatusSnapshot|Test-ClaudeCodeRunning|Test-ClaudeKeeperRunning|Get-Process|Get-CimInstance') 'Opening the tray menu must not search the process list'
 
 # Claude Code is recognised from the fast process list, never from a WMI query.
 Set-Item Function:Test-ClaudeCodeRunning -Value $realCodeCheck
@@ -40,4 +39,4 @@ Check ($script:Starts -eq 1 -and $script:Stops -eq 2) 'Switching the keeper off 
 $source = Get-Content -LiteralPath (Join-Path $sourceRoot 'Start-UsageTrayPill.ps1') -Raw
 Check ($source -match '(?s)\$timer\.Add_Tick\(\{\s*Refresh-Tray\s*if \(\$null -ne \$script:RefreshMainWindow\) \{\s*& \$script:RefreshMainWindow -SkipTray') 'The minute timer must not refresh the tray twice'
 Check ($source -match '(?s)Sync-CodexUsageSnapshot\s*Refresh-Tray\s*if \(\$null -ne \$script:RefreshMainWindow\) \{ & \$script:RefreshMainWindow -SkipTray \}') 'A cache change must not refresh the tray twice'
-Write-Output 'Responsiveness tests OK (no process scan per refresh, keeper search once while off, single tray refresh)'
+Write-Output 'Responsiveness tests OK (no process scan per refresh or tray menu, keeper search once while off, single tray refresh)'

@@ -297,6 +297,8 @@ function ConvertFrom-UtpClaudeControlUsageJson {
 function Get-UtpClaudeControlUsage {
     # Explicit opt-in source, off by default. Verified after sign-in on CLI 2.1.286:
     # quota windows available, zero user messages/model cost, and behaviors=null.
+    # ConfigDirectory: the login of another account (CLAUDE_CONFIG_DIR for the CLI only).
+    param([string]$ConfigDirectory = '')
     $path = Resolve-UtpClaudeUsageCli
     if ([string]::IsNullOrEmpty($path)) { return New-UtpExternalUsageFailure 'claude-code-control' 'setup_required' 'A recent Claude Code CLI is required for the experimental usage diagnostic.' }
     try {
@@ -305,7 +307,7 @@ function Get-UtpClaudeControlUsage {
         if ($versionResult.ExitCode -ne 0 -or -not $match.Success -or [version]$match.Groups[1].Value -lt [version]'2.1.286') {
             return New-UtpExternalUsageFailure 'claude-code-control' 'setup_required' 'Claude Code 2.1.286 or newer is required for this experimental diagnostic.'
         }
-        $result = Invoke-UtpExternalUsageCommand -FilePath $path -Arguments @('-p','--input-format','stream-json','--output-format','stream-json','--verbose','--no-session-persistence','--safe-mode','--setting-sources','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--tools','') -ClaudeUsageControl
+        $result = Invoke-UtpExternalUsageCommand -FilePath $path -Arguments @('-p','--input-format','stream-json','--output-format','stream-json','--verbose','--no-session-persistence','--safe-mode','--setting-sources','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--tools','') -ClaudeUsageControl -EnvironmentOverrides $(if ($ConfigDirectory) { @{ CLAUDE_CONFIG_DIR = $ConfigDirectory } } else { $null })
         ConvertFrom-UtpClaudeControlUsageJson -Json $result.Output
     } catch {
         $code = if ($_.Exception.Message -in @('timeout','response_too_large','auth_required','unexpected_model_activity','unexpected_transcript_activity','interaction_required','initialization_failed','usage_request_failed','missing_usage_response')) { $_.Exception.Message } else { 'usage_response_unavailable' }
@@ -355,10 +357,15 @@ function Merge-UtpClaudeUsageSnapshot {
 }
 
 function Update-ClaudeControlUsage {
-    $fresh=Get-UtpClaudeControlUsage
+    # Ask for the account Claude Desktop uses: through its own login when UTP keeps one, the CLI's login otherwise.
+    $login=Get-ClaudeUsageLogin
+    $fresh=if($login.Missing){New-UtpExternalUsageFailure 'claude-code-control' 'account_sign_in_required' 'Claude Desktop uses an account that has no Claude CLI sign-in in UTP yet.'}else{Get-UtpClaudeControlUsage -ConfigDirectory $login.ConfigDirectory}
     $previous=$null
     try { if(Test-Path -LiteralPath $script:ClaudeControlUsagePath){$previous=Get-Content -LiteralPath $script:ClaudeControlUsagePath -Raw|ConvertFrom-Json -ErrorAction Stop} } catch {}
+    # Values of another account never fill in for this one.
+    if($null -ne $previous -and [string]$previous.accountUuid -ne [string]$login.Account){$previous=$null}
     $snapshot=Merge-UtpClaudeUsageSnapshot -Current $fresh -Previous $previous
+    $snapshot|Add-Member -NotePropertyName accountUuid -NotePropertyValue ([string]$login.Account) -Force
     Write-OpenCodeGoJsonAtomically -Path $script:ClaudeControlUsagePath -Value $snapshot -MutexName 'UsageTrayPillClaudeControlUsageWrite'
     # A retained value is not a successful fetch: keep retry backoff active.
     return [bool]$fresh.available

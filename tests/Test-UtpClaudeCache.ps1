@@ -32,6 +32,8 @@ try {
     $script:ClaudeControlUsagePath=Join-Path $root 'claude-control-usage.json'
     $script:State=New-DefaultState
     $script:State.settings.claudeControlEnabled=$true
+    # The CLI's own login answers; the real Claude accounts on this PC must not matter.
+    function Get-ClaudeUsageLogin { return [pscustomobject]@{ Account=''; ConfigDirectory=''; Missing=$false } }
     $cached|ConvertTo-Json -Depth 8|Set-Content $script:ClaudeControlUsagePath
     $display=Get-ClaudeUsageSnapshot
     Check ($display.stale -and $display.fiveHourRemainingPercent -eq 67.5) 'The UI must accept explicitly cached values without hiding them on lastError.'

@@ -30,16 +30,16 @@ A small Windows utility for checking remaining **Codex, Claude, Antigravity, Ope
 - **A new icon and clear status.** UTP gets its own icon and taskbar group, and a red dot on any provider that needs a new key or sign-in.
 - **More countdowns.** Weekly and monthly limits can count down in days, next to the 5-hour clock.
 
-Coming from rc.7? It all arrives at once. From rc.8, **Check for updates** brings you the newest version in one click. rc.10 finds Claude Code in its new Claude Desktop folder, rc.11 shows the ChatGPT 5-hour limit for plans that have one, rc.12 lets you choose which limits the pill shows, rc.13 follows the account you use in Claude Desktop, and rc.14 lets you sign in to Claude from a notification.
+Coming from rc.7? It all arrives at once. From rc.8, **Check for updates** brings you the newest version in one click. rc.10 finds Claude Code in its new Claude Desktop folder, rc.11 shows the ChatGPT 5-hour limit for plans that have one, rc.12 lets you choose which limits the pill shows, rc.13 follows the account you use in Claude Desktop, rc.14 lets you sign in to Claude from a notification, and rc.15 keeps a Claude sign-in per account and tidies the menu.
 
-[Download v0.1.0-rc.14](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.14) · [Read the changes](CHANGELOG.md#010-rc14---2026-11-07)
+[Download v0.1.0-rc.15](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.15) · [Read the changes](CHANGELOG.md#010-rc15---2026-11-07)
 
 ## At home in your taskbar
 
 ![Actual UTP pills in light and dark themes, showing illustrative Codex and Claude allowances](docs/media/utp-pill-themes.png)
 
 - **A clear glance.** Bold text, smooth rounded edges and crisp icons. The pill follows your Windows taskbar's light or dark theme.
-- **Two at a glance.** Show two providers side by side, such as ChatGPT and Claude. Set it up in the **Pill** tab of the overview, or choose **Show two providers** in the menu (**⋯** in the quick view).
+- **Two at a glance.** Show two providers side by side, such as ChatGPT and Claude. Set it up in the **Pill** tab of the overview, or choose **Pill > Show two providers** in the menu (**⋯** in the quick view).
 - **A quiet interaction.** Click to cycle providers, right-click for the quick view and the menu. No hover popup. Transitions respect Windows animation preferences.
 - **A heads-up when it matters.** Optional notifications when an allowance runs low or a limit resets, and a red dot when a provider needs a new key or sign-in.
 - **Predictable visibility.** The pill hides when a full-screen app covers the primary taskbar and returns when the taskbar is exposed. You can disable full-screen hiding in Preferences.

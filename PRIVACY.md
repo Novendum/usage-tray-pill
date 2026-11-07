@@ -14,13 +14,15 @@ When OpenCode Go is explicitly configured, version 2 of `opencode-go-credentials
 
 When Qwen Token Plan is explicitly configured, `qwen-token-plan-credentials.json` contains the user-supplied QwenCloud Cookie request-header value encrypted with Windows DPAPI for the current Windows user. The plaintext header is not written to disk by UTP.
 
+With the optional Claude CLI source, `claude-accounts\<account>` holds a Claude CLI sign-in for each other Claude Desktop account you signed in to through UTP. The Claude CLI writes these folders itself, its credentials included, with the same per-user protection as its sign-in in your user profile. UTP reads only the account identifier in each folder's `.claude.json` and the write time of its credential file; it moves a folder into place when a sign-in finishes and removes one only when a newer sign-in for the same account replaces it, or when a sign-in was cancelled. Delete a folder to forget that account.
+
 Disabling OpenCode Go or Qwen preserves its credential and cache. Disabled Qwen collection sends no quota requests.
 
 When notifications are on, `notifications-state.json` keeps, for each provider window, the last remaining percentage, its reset time and whether a warning was shown, so a restart does not repeat warnings. Windows shows the notification text (provider, window and percentage) and keeps it in its notification center according to your Windows settings.
 
 An update started with **Check for updates** keeps the previous application folder next to the installation as `<folder>.previous-<version>`. UTP keeps one such backup and removes older backups it made itself; folders you made are left alone. The temporary `.utp-update-*` folder is removed after the update, and `update.log` in the data folder records when you updated and between which versions.
 
-Do not include this directory in bug reports. Manual notes may contain information you entered yourself.
+Do not include this directory in bug reports. Manual notes may contain information you entered yourself, and `claude-accounts` contains Claude sign-ins.
 
 ## Local data read by UTP
 
@@ -30,7 +32,7 @@ Depending on enabled features, UTP may read:
 - local ChatGPT/Codex installation paths to find an application icon;
 - Claude Code statusline JSON sent directly to the configured UTP script;
 - Claude Desktop's local `plan-usage-history.json` cache, and the signed-in account's identifier (`lastKnownAccountUuid`) in Claude Desktop's `config.json`;
-- the signed-in account's identifier (`oauthAccount.accountUuid`) in the Claude CLI's `.claude.json`, to tell whether Claude Desktop and the CLI use the same account.
+- the signed-in account's identifier (`oauthAccount.accountUuid`) in the `.claude.json` of the Claude CLI and of each sign-in UTP keeps per account, to ask Claude for the account Claude Desktop uses;
 - installed CLI executable paths, versions, and bounded command output for supported external quota adapters;
 - UTP's own DPAPI-encrypted OpenCode Go API key after the user explicitly saves it;
 - UTP's own DPAPI-encrypted QwenCloud dashboard credential after the user explicitly saves it.
@@ -52,6 +54,6 @@ Claude normally uses statusline data or its Desktop cache. The optional, explici
 
 ## Uninstalling data
 
-Startup, desktop, and Start-menu shortcuts can be removed independently. UTP does not automatically remove `%APPDATA%\UsageTrayPill`; delete that directory manually if you also want to remove cached settings and notes.
+Startup, desktop, and Start-menu shortcuts can be removed independently. UTP does not automatically remove `%APPDATA%\UsageTrayPill`; delete that directory manually if you also want to remove cached settings, notes and the Claude sign-ins UTP keeps per account.
 
 The optional Claude CLI source stores only normalized quota windows and status in `claude-control-usage.json`. Its control request disables transcript-behavior scanning and sends no user message. Provider CLIs manage their own sign-in; UTP does not copy their credentials.

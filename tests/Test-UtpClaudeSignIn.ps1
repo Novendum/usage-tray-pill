@@ -12,9 +12,12 @@ function Get-ProviderAttentionCode { param([string]$Source) if ($Source -eq 'cla
 $script:TestCli = 'C:\fixture\claude.exe'
 function Resolve-UtpClaudeUsageCli { return $script:TestCli }
 $script:Started = New-Object System.Collections.ArrayList
+$script:StartedFolders = New-Object System.Collections.ArrayList
+$realSignInStart = ${function:Start-ClaudeSignInProcess}
 function Start-ClaudeSignInProcess {
-    param([string]$FilePath)
+    param([string]$FilePath, [string]$ConfigDirectory = '')
     [void]$script:Started.Add($FilePath)
+    [void]$script:StartedFolders.Add($ConfigDirectory)
     $process = [pscustomobject]@{ HasExited = $false; Disposed = $false }
     $process | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $this.Disposed = $true }
     $script:LastProcess = $process
@@ -29,6 +32,10 @@ function Close-QuickPanel { }
 $cacheRoot = Join-Path ([IO.Path]::GetTempPath()) ('UtpClaudeSignIn-' + [guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $cacheRoot)
 $script:ClaudeControlUsagePath = Join-Path $cacheRoot 'claude-control-usage.json'
+$script:DataDir = $cacheRoot
+# By default the CLI's own login answers; per-account cases set another login below.
+$script:TestLogin = [pscustomobject]@{ Account = 'own-account'; ConfigDirectory = ''; Missing = $false }
+function Get-ClaudeUsageLogin { return $script:TestLogin }
 function Write-ClaudeAnswer { param([DateTime]$At) @{ lastCheckedAt = $At.ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $script:ClaudeControlUsagePath -Encoding UTF8 }
 $script:TestItems = @()
 function Get-TaskbarBadgeData { param([string]$Source, [switch]$AllWindows) [pscustomobject]@{ Items = $script:TestItems } }
@@ -111,7 +118,66 @@ Check ($script:Started.Count -eq 2 -and $script:Overviews -eq 1) 'Setup problems
 $script:TestCode = 'auth_required'
 $script:TestCli = ''
 Check (-not (Start-ClaudeSignIn) -and $script:Overviews -eq 2) 'Without a Claude CLI the overview must explain what to install'
-Write-Output 'Claude sign-in tests OK (window, one prompt per problem, click, refresh and result after sign-in, quick view)'
+
+# Another account in Claude Desktop signs in into a fresh folder of its own: the CLI starts directly in its own
+# window, with CLAUDE_CONFIG_DIR set for that one start, and UTP's own environment stays as it was.
+$script:TestCli = 'C:\fixture\claude.exe'
+$script:ShellStarts = New-Object System.Collections.ArrayList
+$script:ShellFails = $false
+function Start-UtpProcess {
+    param($Info)
+    [void]$script:ShellStarts.Add([pscustomobject]@{ File = $Info.FileName; Arguments = $Info.Arguments; Shell = $Info.UseShellExecute; Folder = $env:CLAUDE_CONFIG_DIR })
+    if ($script:ShellFails) { throw 'Synthetic start failure' }
+    return [pscustomobject]@{ HasExited = $false }
+}
+$savedConfigDirectory = $env:CLAUDE_CONFIG_DIR
+try {
+    $env:CLAUDE_CONFIG_DIR = 'C:\own-login'
+    [void](& $realSignInStart -FilePath "C:\fixture's\claude.exe" -ConfigDirectory "C:\data\it's\pending-1")
+    $shellStart = $script:ShellStarts[-1]
+    Check ($shellStart.File -eq "C:\fixture's\claude.exe" -and $shellStart.Arguments -eq 'auth login --claudeai' -and $shellStart.Shell -and $shellStart.Folder -eq "C:\data\it's\pending-1" -and $env:CLAUDE_CONFIG_DIR -eq 'C:\own-login') 'Another account must sign in into its own folder without changing UTP''s own environment'
+    Remove-Item Env:CLAUDE_CONFIG_DIR
+    $script:ShellFails = $true
+    try { [void](& $realSignInStart -FilePath 'C:\fixture\claude.exe' -ConfigDirectory 'C:\data\pending-2') } catch { }
+    $script:ShellFails = $false
+    Check ($script:ShellStarts[-1].Folder -eq 'C:\data\pending-2' -and $null -eq $env:CLAUDE_CONFIG_DIR) 'A failed start must not leave the folder in UTP''s environment'
+    [void](& $realSignInStart -FilePath 'C:\fixture\claude.exe')
+    Check ($null -eq $script:ShellStarts[-1].Folder -and $script:ShellStarts.Count -eq 3) 'The CLI''s own sign-in must start without a folder'
+}
+finally { $env:CLAUDE_CONFIG_DIR = $savedConfigDirectory }
+$target = '44444444-4444-4444-8444-444444444444'
+$other = '55555555-5555-4555-8555-555555555555'
+function Write-PendingLogin { param([string]$Account) [void](New-Item -ItemType Directory -Path $script:StartedFolders[-1] -Force); ('{"oauthAccount":{"accountUuid":"' + $Account + '"}}') | Set-Content -LiteralPath (Join-Path $script:StartedFolders[-1] '.claude.json') -Encoding UTF8 }
+$script:TestLogin = [pscustomobject]@{ Account = $target; ConfigDirectory = ''; Missing = $true }
+$script:TestCode = 'account_sign_in_required'
+$script:ClaudeSignInPrompted = $false
+$script:ClaudeSignInResultSince = $null
+Update-ClaudeSignInPrompt
+Check ($script:Balloons[-1] -like 'Sign in for your Claude Desktop account|*' -and $script:NotificationAction -eq 'claude-sign-in') 'A missing login for the Desktop account must be named in the prompt'
+$startsBefore = $script:Started.Count
+Invoke-UtpNotificationAction
+$pending = $script:StartedFolders[-1]
+Check ($script:Started.Count -eq $startsBefore + 1 -and $pending -like (Join-Path (Get-ClaudeAccountsDirectory) 'pending-*') -and (Test-Path -LiteralPath $pending)) 'The sign-in for that account must use a fresh folder'
+Write-PendingLogin $target
+$script:LastProcess.HasExited = $true
+Complete-ClaudeSignIn
+Check ((Get-ClaudeLoginAccountUuid -ConfigDirectory (Join-Path (Get-ClaudeAccountsDirectory) $target)) -eq $target -and -not (Test-Path -LiteralPath $pending) -and $null -ne $script:ClaudeSignInResultSince) 'A finished sign-in must become that account''s login'
+$script:ClaudeSignInResultSince = $null
+# The wrong account is kept for later, and the user hears right away.
+[void](Start-ClaudeSignIn)
+Write-PendingLogin $other
+$script:LastProcess.HasExited = $true
+Complete-ClaudeSignIn
+Check ($script:Balloons[-1] -like 'Signed in to another Claude account|*' -and $script:NotificationAction -eq 'claude-sign-in' -and (Test-Path -LiteralPath (Join-Path (Get-ClaudeAccountsDirectory) $other)) -and $null -eq $script:ClaudeSignInResultSince) 'Signing in to another account must say so and offer another try'
+# A cancelled sign-in leaves nothing behind.
+[void](Start-ClaudeSignIn)
+$cancelled = $script:StartedFolders[-1]
+$script:LastProcess.HasExited = $true
+Complete-ClaudeSignIn
+Check (-not (Test-Path -LiteralPath $cancelled)) 'A cancelled sign-in must leave no folder'
+$script:ClaudeSignInResultSince = $null
+$script:TestLogin = [pscustomobject]@{ Account = 'own-account'; ConfigDirectory = ''; Missing = $false }
+Write-Output 'Claude sign-in tests OK (window, one prompt per problem, click, refresh and result after sign-in, quick view, logins per account)'
 }
 finally {
     $resolved = [IO.Path]::GetFullPath($cacheRoot)

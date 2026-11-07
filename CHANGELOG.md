@@ -4,6 +4,13 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.15] - 2026-11-07
+
+### Changed
+
+- **A Claude sign-in per account.** With **Use Claude CLI quotas** on, UTP asks Claude for the account Claude Desktop uses, also when that is another account than the Claude CLI's own sign-in. For each other account you sign in once: UTP shows a notification, and **Sign in for this account** in the quick view. Click either and sign in with that account in the window that opens. UTP keeps that sign-in for the account, so switching accounts in Claude Desktop switches the pill within seconds, with reset times. Until Claude answers for the new account, the pill shows `--`, never another account's usage. This replaces rc.13's use of Claude Desktop's usage history for the CLI source, which arrived only about every 15 minutes and without reset times. Signed in to the wrong account? UTP says so right away and offers another try.
+- **A tidier menu.** The menu (right-click the tray icon, or **⋯** in the quick view) starts with what you use most: **Quick view**, **Usage overview** and **Refresh now**, plus **Sign in to Claude...** whenever Claude needs it. Pill options, provider setup and the rarely used tools moved into **Pill**, **Providers** and **More**; **Pill > Pill settings...** opens the Pill tab. The header shows the UTP version instead of process details, so the menu opens without searching the process list.
+
 ## [0.1.0-rc.14] - 2026-11-07
 
 ### Added
