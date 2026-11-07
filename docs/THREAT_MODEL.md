@@ -18,7 +18,7 @@ UTP runs with the current user's permissions. Windows DPAPI protects UTP's optio
 
 ### Provider applications
 
-ChatGPT/Codex, Claude, and Antigravity are separate local applications. Their executable paths, command output, usage files, statusline payloads, and app-server responses are untrusted inputs. UTP validates commands, fields, sizes, and timeouts before using them. Codex's persistent stdio connection is owned by the hidden collector; external provider CLIs manage their own sign-in, without UTP reading their credential stores.
+ChatGPT/Codex, Claude, and Antigravity are separate local applications. Their executable paths, command output, usage files, statusline payloads, and app-server responses are untrusted inputs. UTP validates commands, fields, sizes, and timeouts before using them. Codex's persistent stdio connection is owned by the hidden collector; external provider CLIs manage their own sign-in, without UTP reading their credential stores. The Claude CLI sign-ins that UTP keeps per account live in UTP's data folder; the Claude CLI writes and reads them, with the same per-user protection as in the user profile, and UTP passes only the folder (`CLAUDE_CONFIG_DIR`) and reads only the account identifier next to it.
 
 ### Provider usage services
 

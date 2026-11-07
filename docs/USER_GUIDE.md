@@ -6,7 +6,7 @@ Your AI usage, one glance away.
 
 1. Extract the **whole ZIP** to a folder you want to keep.
 2. Review the scripts, then double-click **Start-UsageTrayPill.cmd**.
-3. Click the pill to switch providers. Right-click it for the **quick view**: every limit, when it resets and what needs your attention. The **⋯** button in the quick view opens the menu with the overview, settings and Exit; Shift+right-click on the pill opens that menu directly.
+3. Click the pill to switch providers. Right-click it for the **quick view**: every limit, when it resets and what needs your attention. The **⋯** button in the quick view opens the menu: **Usage overview** and **Refresh now** on top, then **Pill**, **Providers** and **More** for settings and tools, and **Check for updates** and **Exit**. Shift+right-click on the pill, or right-click on the tray icon, opens that menu directly.
 4. Optional: show two providers at once, such as ChatGPT and Claude, in the overview's **Pill** tab. Then click the left or right side of the pill to switch that side. Turn on **Show time until the 5-hour limit resets** to see a small clock with the remaining time, such as `2h10m`, and **Also for weekly and monthly limits** to count those down in days, such as `3d`. A clock appears once you start using a limit; a limit with 100% left has nothing to reset yet.
 5. Choose what the pill shows under **Limits in the pill** in the **Pill** tab: one check box per limit, per provider. Turn off what you do not need, such as the weekly limit of a Claude Team plan, which has none. Hidden limits get no alerts; the quick view still lists everything. With **Windows shown** set to **Tightest window only**, each provider shows just the shown limit with the least left.
 
@@ -18,7 +18,7 @@ Keep `src/`, `assets/` and `scripts/` beside the start file. You do not need to 
 
 Use only the services you already have. Sign in with each provider's supported CLI or configure its optional connection in UTP. OpenCode Go, Qwen and the experimental Claude CLI source are off by default.
 
-See [provider setup](PROVIDERS.md). Switching accounts in Claude Desktop? The Claude side follows the account Claude Desktop uses, updated about every 15 minutes. Missing values appear as `--`; cached values are marked. A small red dot on a provider's logo means it needs you: sign in again, add a new key or finish setup. The quick view says which. Resolve those before using **Refresh now**. For Claude, UTP also shows a notification when it needs a new sign-in: click it, or **Sign-in required** in the quick view, and sign in in the window that opens.
+See [provider setup](PROVIDERS.md). Switching accounts in Claude Desktop? With **Use Claude CLI quotas** on, the Claude side follows the account Claude Desktop uses. Sign in once for each other account: UTP shows a notification, and **Sign in for this account** in the quick view. Click it and sign in with that account; after that a switch shows within seconds. Missing values appear as `--`; cached values are marked. A small red dot on a provider's logo means it needs you: sign in again, add a new key or finish setup. The quick view says which. Resolve those before using **Refresh now**. For Claude, UTP also shows a notification when it needs a new sign-in: click it, **Sign-in required** in the quick view or **Sign in to Claude...** in the menu, and sign in in the window that opens.
 
 ## Notifications and updates
 

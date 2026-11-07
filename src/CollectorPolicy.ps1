@@ -1,6 +1,6 @@
 function Get-ProviderRetrySeconds {
     param([string]$ErrorCode,[int]$FailureCount,[int]$RetryAfterSeconds=0)
-    if ($ErrorCode -in @('auth_expired','auth_required','unsupported_auth_context','unsupported_response','unexpected_model_activity','unexpected_transcript_activity','access_denied','subscription_required','api_key_required','credential_unreadable','setup_required')) { return -1 }
+    if ($ErrorCode -in @('auth_expired','auth_required','unsupported_auth_context','account_sign_in_required','unsupported_response','unexpected_model_activity','unexpected_transcript_activity','access_denied','subscription_required','api_key_required','credential_unreadable','setup_required')) { return -1 }
     if ($RetryAfterSeconds -gt 0) { return [Math]::Min(86400,[Math]::Max(30,$RetryAfterSeconds)) }
     if ($ErrorCode -eq 'quota_fetch_unavailable') { return [int][Math]::Min(900,[Math]::Max(300,30*[Math]::Pow(2,[Math]::Min(5,[Math]::Max(0,$FailureCount-1))))) }
     return [int][Math]::Min(900,30*[Math]::Pow(2,[Math]::Min(5,[Math]::Max(0,$FailureCount-1))))
@@ -19,6 +19,19 @@ function Get-UtpCredentialRevision {
     switch($Source){
         'opencodego' {$path=$script:OpenCodeGoCredentialPath;$value=if(Test-UtpOpenCodeEnvironmentKeyActive){[string]$env:OPENCODE_GO_API_KEY}else{''}}
         'qwen' {$path=$script:QwenCredentialPath;$value=[string]$env:QWEN_TOKEN_PLAN_COOKIE}
+        'claude' {
+            # The account Claude Desktop uses and when its login changed: a switch or a new sign-in asks again at once.
+            # Only identifiers and write times; Claude's credential files are never read.
+            try {$login=Get-ClaudeUsageLogin} catch {return ''}
+            $own=if(-not [string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)){$env:CLAUDE_CONFIG_DIR}else{Join-Path $env:USERPROFILE '.claude'}
+            $parts=@([string]$login.Account,[string]$login.ConfigDirectory,[string]$login.Missing)
+            foreach($file in @((Join-Path $own '.credentials.json'),$(if($login.ConfigDirectory){Join-Path $login.ConfigDirectory '.credentials.json'}))){
+                if(-not $file){continue}
+                $item=New-Object IO.FileInfo $file
+                $parts+=$(if($item.Exists){[string]$item.LastWriteTimeUtc.Ticks}else{'none'})
+            }
+            $value='claude:'+($parts -join '|')
+        }
         default {return ''}
     }
     $bytes=$null

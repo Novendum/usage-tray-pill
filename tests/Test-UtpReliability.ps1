@@ -60,16 +60,34 @@ try {
     function Clear-ClaudeKeeperCooldown {}
     function Ensure-ClaudeUsageKeeper {}
     $script:State = New-DefaultState
+    $script:AppVersion = '9.9.9-test'
+    $script:MenuSignIn = $false
+    function Test-ClaudeSignInNeeded { return $script:MenuSignIn }
     $menu = New-TrayMenu
     try {
-        $badge = $menu.Items | Where-Object Text -eq 'Show status badge'
+        # The most used actions on top, settings and rarely used tools in submenus; nothing is lost.
+        $top = @($menu.Items | Where-Object { $_ -is [System.Windows.Forms.ToolStripMenuItem] } | ForEach-Object { $_.Text })
+        Check (($top -join '|') -eq 'Usage Tray Pill 9.9.9-test|Quick view|Usage overview|Refresh now|Sign in to Claude...|Pill|Providers|More|Check for updates...|Exit') "The menu must keep the most used actions on top: $($top -join '|')"
+        foreach ($text in @('Show the pill', 'Show two providers', 'Pill settings...', 'Windows taskbar settings', 'Open Codex settings', 'Set up OpenCode Go...', 'Set up Qwen Token Plan...', 'Add reset...', 'Add limit...', 'Keep Claude active', 'Open data folder')) {
+            Check ($null -ne (Find-TrayMenuItem -Items $menu.Items -Text $text)) "The menu must still offer $text"
+        }
+        $badge = Find-TrayMenuItem -Items $menu.Items -Text 'Show the pill'
         $badge.PerformClick()
         Check ($script:State.settings.showTaskbarBadge -eq $false) 'Badge can be disabled'
         $badge.PerformClick()
         Check ($script:State.settings.showTaskbarBadge -eq $true) 'Badge can be re-enabled'
-        $keeper = $menu.Items | Where-Object Text -eq 'Keep Claude active'
+        $keeper = Find-TrayMenuItem -Items $menu.Items -Text 'Keep Claude active'
         $keeper.PerformClick()
         Check ($script:State.settings.keepClaudeCodeAlive -eq $true) 'Keeper checkbox persists its checked state'
+        # Sign in to Claude shows on top only while Claude needs a sign-in.
+        $opening = [System.Windows.Forms.ToolStripDropDown].GetMethod('OnOpening', [Reflection.BindingFlags]'NonPublic,Instance')
+        $signIn = $menu.Items | Where-Object { $_.Text -eq 'Sign in to Claude...' }
+        [void]$opening.Invoke($menu.PSObject.BaseObject, [object[]]@([System.ComponentModel.CancelEventArgs]::new()))
+        Check (-not $signIn.Available) 'Without a sign-in problem the menu must not offer a sign-in on top'
+        $script:MenuSignIn = $true
+        [void]$opening.Invoke($menu.PSObject.BaseObject, [object[]]@([System.ComponentModel.CancelEventArgs]::new()))
+        Check ($signIn.Available -and $script:TrayMenuOpen) 'A sign-in problem must put Sign in to Claude on top'
+        $script:TrayMenuOpen = $false
     } finally { $menu.Dispose() }
 
     $script:State = New-DefaultState

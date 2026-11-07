@@ -37,6 +37,7 @@ $worker={
     try {if(Test-Path -LiteralPath $cache){$snapshot=Get-Content -LiteralPath $cache -Raw|ConvertFrom-Json}} catch {}
     $schedule=Read-UtpCollectorSchedule -Path $schedulePath -CredentialRevision $credentialRevision -Snapshot $snapshot
     $next=$schedule.Next;$failures=$schedule.Failures
+    $revisionAt=[datetime]::MinValue
     try {
         while(-not $Stop.Requested) {
             $file=Get-Item -LiteralPath $script:DataPath -ErrorAction SilentlyContinue
@@ -56,8 +57,12 @@ $worker={
             $enabled=Test-ProviderEnabled -Source $Source -Settings $script:State.settings
             if($Source -eq 'codex' -and $manual){$enabled=$true}
             if(-not $enabled) {Start-Sleep -Milliseconds 500;continue}
-            $revision=Get-UtpCredentialRevision $Source
-            if($revision -ne $credentialRevision){$credentialRevision=$revision;$next=[datetime]::MinValue;$failures=0}
+            # Claude's check reads Claude Desktop's settings: every two seconds is quick enough for an account switch.
+            if($Source -ne 'claude' -or ((Get-Date)-$revisionAt).TotalSeconds -ge 2){
+                $revisionAt=Get-Date
+                $revision=Get-UtpCredentialRevision $Source
+                if($revision -ne $credentialRevision){$credentialRevision=$revision;$next=[datetime]::MinValue;$failures=0}
+            }
             if($manual){$next=[datetime]::MinValue;$failures=0}
             if((Get-Date) -lt $next){Start-Sleep -Milliseconds 500;continue}
             if($lastToken){Write-OpenCodeGoJsonAtomically -Path $consumedPath -Value ([pscustomobject]@{token=$lastToken}) -MutexName "UsageTrayPillConsumed-$Source"}

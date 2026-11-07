@@ -146,7 +146,7 @@ if (-not ($RefreshLiveOnce -or $RefreshAntigravityOnce -or $RefreshOpenCodeGoOnc
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $script:AppName = "Usage Tray Pill"
-$script:AppVersion = "0.1.0-rc.14"
+$script:AppVersion = "0.1.0-rc.15"
 $script:DataDir = Join-Path $env:APPDATA "UsageTrayPill"
 $script:DataPath = Join-Path $script:DataDir "data.json"
 $script:CodexUsagePath = Join-Path $script:DataDir "codex-usage.json"
@@ -167,6 +167,8 @@ $script:ClaudeSignInProcess = $null
 $script:ClaudeSignInPrompted = $false
 # Set when a sign-in window closed: UTP reports the first Claude answer after that moment.
 $script:ClaudeSignInResultSince = $null
+$script:ClaudeSignInDirectory = ''
+$script:ClaudeSignInExpected = ''
 $script:TrayIconSignature = ""
 $script:TrayTooltipText = ""
 $script:TrayMenuOpen = $false
@@ -1531,20 +1533,25 @@ function Convert-ClaudeDesktopUsageHistory {
 function Get-ClaudeDesktopDataDirectories {
     # Current Claude Desktop builds keep their data in %LOCALAPPDATA%\Claude-Data\claude_<publisher>;
     # older packaged builds in LocalCache\Roaming\Claude, installer builds in %APPDATA%\Claude.
-    $directories = @(foreach ($data in @(Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'Claude-Data') -Directory -Filter 'claude_*' -ErrorAction SilentlyContinue)) { $data.FullName })
-    $directories += @(foreach ($package in @(Get-ChildItem -LiteralPath (Join-Path $env:LOCALAPPDATA 'Packages') -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue)) { Join-Path $package.FullName 'LocalCache\Roaming\Claude' })
+    # Plain .NET listings: the collector checks for an account switch twice a second.
+    $directories = @(try { [IO.Directory]::GetDirectories((Join-Path $env:LOCALAPPDATA 'Claude-Data'), 'claude_*') } catch { })
+    $directories += @(foreach ($package in @(try { [IO.Directory]::GetDirectories((Join-Path $env:LOCALAPPDATA 'Packages'), 'Claude_*') } catch { })) { Join-Path $package 'LocalCache\Roaming\Claude' })
     if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) { $directories += Join-Path $env:APPDATA 'Claude' }
-    return @($directories | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
+    return @(foreach ($directory in $directories) { if ([IO.Directory]::Exists($directory)) { $directory } })
 }
 
-function Get-ClaudeCliAccountUuid {
-    # The account the Claude CLI is signed in to, read as an identifier from its settings file; never a credential.
-    $root = if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) { $env:CLAUDE_CONFIG_DIR } else { $env:USERPROFILE }
+function Get-ClaudeLoginAccountUuid {
+    # The account a Claude CLI login belongs to, read as an identifier from its settings file; never a credential.
+    # Without a folder: the CLI's own login (CLAUDE_CONFIG_DIR, else the user profile).
+    param([string]$ConfigDirectory = '')
+    $root = if ($ConfigDirectory) { $ConfigDirectory } elseif (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) { $env:CLAUDE_CONFIG_DIR } else { $env:USERPROFILE }
     $path = Join-Path $root '.claude.json'
     try {
-        $item = Get-Item -LiteralPath $path -ErrorAction Stop
-        $cache = $script:ClaudeCliAccountCache
-        if ($null -ne $cache -and $cache.Path -eq $path -and $cache.WriteTime -eq $item.LastWriteTimeUtc) { return $cache.Uuid }
+        $item = New-Object IO.FileInfo $path
+        if (-not $item.Exists) { return '' }
+        if ($script:ClaudeCliAccountCache -isnot [hashtable]) { $script:ClaudeCliAccountCache = @{} }
+        $cached = $script:ClaudeCliAccountCache[$path]
+        if ($null -ne $cached -and $cached.WriteTime -eq $item.LastWriteTimeUtc) { return $cached.Uuid }
         # Windows PowerShell rejects this file when project paths differ only in case, so read the one field directly.
         $text = [IO.File]::ReadAllText($path)
         $start = $text.IndexOf('"oauthAccount"')
@@ -1553,10 +1560,63 @@ function Get-ClaudeCliAccountUuid {
             $match = [regex]::Match($text.Substring($start, [Math]::Min(8192, $text.Length - $start)), '"accountUuid"\s*:\s*"([0-9A-Fa-f-]{36})"')
             if ($match.Success) { $uuid = $match.Groups[1].Value.ToLowerInvariant() }
         }
-        $script:ClaudeCliAccountCache = @{ Path = $path; WriteTime = $item.LastWriteTimeUtc; Uuid = $uuid }
+        $script:ClaudeCliAccountCache[$path] = @{ WriteTime = $item.LastWriteTimeUtc; Uuid = $uuid }
         return $uuid
     }
     catch { return '' }
+}
+
+function Get-ClaudeCliAccountUuid { return Get-ClaudeLoginAccountUuid }
+
+function Get-ClaudeDesktopAccountUuid {
+    # The account Claude Desktop is signed in to: one identifier from its settings, or '' without Claude Desktop.
+    # The collector asks twice a second, so the file is read again only after Claude Desktop changed it.
+    $newest = $null
+    foreach ($directory in @(Get-ClaudeDesktopDataDirectories)) {
+        $file = New-Object IO.FileInfo (Join-Path $directory 'config.json')
+        if ($file.Exists -and ($null -eq $newest -or $file.LastWriteTimeUtc -gt $newest.LastWriteTimeUtc)) { $newest = $file }
+    }
+    if ($null -eq $newest) { return '' }
+    $cached = $script:ClaudeDesktopAccountCache
+    if ($cached -is [hashtable] -and $cached.Path -eq $newest.FullName -and $cached.WriteTime -eq $newest.LastWriteTimeUtc) { return $cached.Uuid }
+    $uuid = ''
+    try {
+        $match = [regex]::Match([IO.File]::ReadAllText($newest.FullName), '"lastKnownAccountUuid"\s*:\s*"([0-9A-Fa-f-]{36})"')
+        if ($match.Success) { $uuid = $match.Groups[1].Value.ToLowerInvariant() }
+    }
+    catch { return '' }
+    $script:ClaudeDesktopAccountCache = @{ Path = $newest.FullName; WriteTime = $newest.LastWriteTimeUtc; Uuid = $uuid }
+    return $uuid
+}
+
+function Get-ClaudeAccountsDirectory {
+    # One Claude CLI login per extra account, each a CLAUDE_CONFIG_DIR of its own; the CLI writes its files there.
+    return Join-Path $script:DataDir 'claude-accounts'
+}
+
+function Get-ClaudeUsageLogin {
+    # Which Claude CLI login answers for the account Claude Desktop uses. Without Claude Desktop, or when it uses
+    # the CLI's own account, that is the CLI's own login; another account needs a login of its own, kept by UTP.
+    $own = Get-ClaudeLoginAccountUuid
+    $desktop = Get-ClaudeDesktopAccountUuid
+    if (-not $desktop -or $desktop -eq $own) { return [pscustomobject]@{ Account = $own; ConfigDirectory = ''; Missing = $false } }
+    $directory = Join-Path (Get-ClaudeAccountsDirectory) $desktop
+    $known = (Get-ClaudeLoginAccountUuid -ConfigDirectory $directory) -eq $desktop
+    return [pscustomobject]@{ Account = $desktop; ConfigDirectory = $(if ($known) { $directory } else { '' }); Missing = -not $known }
+}
+
+function Save-ClaudeAccountLogin {
+    # A finished sign-in in a fresh folder becomes that account's login, replacing an older one; an empty folder goes.
+    param([string]$Directory)
+    $account = Get-ClaudeLoginAccountUuid -ConfigDirectory $Directory
+    try {
+        if (-not $account) { Remove-Item -LiteralPath $Directory -Recurse -Force -ErrorAction SilentlyContinue; return '' }
+        $destination = Join-Path (Get-ClaudeAccountsDirectory) $account
+        if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
+        Move-Item -LiteralPath $Directory -Destination $destination
+    }
+    catch { }
+    return $account
 }
 
 function Get-ClaudeDesktopUsageSnapshot {
@@ -1613,14 +1673,13 @@ function Get-ClaudeUsageSnapshot {
             $five=@($controlItems)|Where-Object key -eq 'five_hour'|Select-Object -First 1 -Wait
             $week=@($controlItems)|Where-Object key -eq 'seven_day'|Select-Object -First 1 -Wait
             $usage=[pscustomobject]@{source='claude-code-control';lastCheckedAt=$control.lastCheckedAt;lastError=$control.lastError;errorCode=$control.errorCode;lastSuccessAt=$control.lastSuccessAt;stale=[bool]$control.stale;available=[bool]$control.available;fiveHourRemainingPercent=$five.remainingPercent;fiveHourResetsAt=$five.resetsAt;sevenDayRemainingPercent=$week.remainingPercent;sevenDayResetsAt=$week.resetsAt;limits=@($controlItems);modelName='';version=''}
-        }catch{$usage=$null}
-        # Claude Desktop may be signed in to another account than the CLI that UTP asks. While Desktop records
-        # current usage, the pill follows Desktop's account; percentages only, as Desktop keeps no reset times.
-        $desktopUsage = Get-ClaudeDesktopUsageSnapshot
-        if ($null -ne $desktopUsage) {
-            $cliAccount = Get-ClaudeCliAccountUuid
-            $otherAccount = $desktopUsage.accountUuid -and $cliAccount -and $desktopUsage.accountUuid -ne $cliAccount
-            if ($otherAccount -or (-not [bool]$desktopUsage.pending -and (Test-ClaudeUsageNeedsDesktopFallback $usage))) { $usage = $desktopUsage }
+        }catch{$usage=$null;$control=$null}
+        # The collector asks for the account Claude Desktop uses; right after a switch the file still holds the previous one.
+        if ($null -ne $usage -and -not [string]::IsNullOrWhiteSpace([string]$control.accountUuid)) {
+            $login = Get-ClaudeUsageLogin
+            if ($login.Account -and [string]$control.accountUuid -ne $login.Account) {
+                $usage = [pscustomobject]@{ source = 'claude-code-control'; pending = $true; lastCheckedAt = ''; lastError = ''; errorCode = ''; stale = $false; available = $false; fiveHourRemainingPercent = $null; fiveHourResetsAt = ''; sevenDayRemainingPercent = $null; sevenDayResetsAt = ''; limits = @(); modelName = ''; version = '' }
+            }
         }
     }
     elseif (Test-Path -LiteralPath $script:ClaudeUsagePath) {
@@ -2019,7 +2078,7 @@ function Get-TaskbarBadgeProviderData {
 
         $cached=[bool]$usage.stale -and @($items|Where-Object {$_.Text -ne '--'}).Count -gt 0
         if($cached){$items += [pscustomobject]@{Label='cache';Text='';Color=$neutralColor}}
-        $status=if($cached){'Cached '+(Get-DateOrNull $usage.lastSuccessAt).ToString('HH:mm')}elseif(@($items|Where-Object {$_.Text -ne '--'}).Count -gt 0){'Remaining allowance'}elseif([bool]$usage.pending){'Waiting for Claude Desktop'}elseif(-not $script:State.settings.claudeControlEnabled){'Waiting for statusline data'}elseif($usage.errorCode -in @('auth_required','unsupported_auth_context','setup_required')){'CLI sign-in / setup required'}elseif((Get-ProviderRetrySeconds ([string]$usage.errorCode) 1) -lt 0){'Collection paused; check Details'}else{'Usage unavailable; retrying'}
+        $status=if($cached){'Cached '+(Get-DateOrNull $usage.lastSuccessAt).ToString('HH:mm')}elseif(@($items|Where-Object {$_.Text -ne '--'}).Count -gt 0){'Remaining allowance'}elseif([bool]$usage.pending){if([string]$usage.source -eq 'claude-code-control'){'Switching accounts'}else{'Waiting for Claude Desktop'}}elseif(-not $script:State.settings.claudeControlEnabled){'Waiting for statusline data'}elseif($usage.errorCode -in @('auth_required','unsupported_auth_context','setup_required')){'CLI sign-in / setup required'}elseif((Get-ProviderRetrySeconds ([string]$usage.errorCode) 1) -lt 0){'Collection paused; check Details'}else{'Usage unavailable; retrying'}
         return [pscustomobject]@{
             Cached = $cached
             StatusText = $status
@@ -2297,9 +2356,9 @@ function Get-TaskbarBadgeDividerColor {
     return [System.Drawing.Color]::FromArgb(82,85,96)
 }
 
-$script:ProviderAttentionCodes = @('auth_expired','auth_required','api_key_required','subscription_required','setup_required','credential_unreadable','unsupported_auth_context','access_denied')
+$script:ProviderAttentionCodes = @('auth_expired','auth_required','api_key_required','subscription_required','setup_required','credential_unreadable','unsupported_auth_context','access_denied','account_sign_in_required')
 # Claude codes that a new sign-in of the Claude CLI fixes; setup_required needs a newer CLI instead.
-$script:ClaudeSignInCodes = @('auth_required','unsupported_auth_context','auth_expired')
+$script:ClaudeSignInCodes = @('auth_required','unsupported_auth_context','auth_expired','account_sign_in_required')
 
 function Get-ProviderAttentionCode {
     param([string]$Source)
@@ -3523,7 +3582,7 @@ function Get-ProviderStatusMessage {
     }
     if ($null -eq $usage) { return "$name - No usage data yet" }
     # Short enough for the quick view's status slot.
-    if ($Source -eq 'claude' -and [bool]$usage.pending) { return "$name - Waiting for Claude Desktop" }
+    if ($Source -eq 'claude' -and [bool]$usage.pending) { return $(if ([string]$usage.source -eq 'claude-code-control') { "$name - Switching accounts" } else { "$name - Waiting for Claude Desktop" }) }
     if ([string]$usage.lastError -eq 'auth_expired') { return "$name - Session expired. Right-click > Set up $name to sign in again." }
     if ([bool]$usage.stale -and [bool]$usage.available) { return "$name - Cached values from $(Format-DisplayDate $usage.lastSuccessAt)" }
     if (-not [string]::IsNullOrWhiteSpace([string]$usage.lastError)) { return "$name - Unable to refresh. Right-click > Refresh now." }
@@ -4162,15 +4221,12 @@ function Limit-Text {
 }
 
 function Get-StatusSnapshot {
-    # Only the tray menu shows whether Claude Code runs; checking every process costs time on each refresh.
-    param([switch]$IncludeClaudeProcesses)
-
+    # No process search here: checking every process costs time on each refresh.
     $activeResets = @(Get-ActiveResets)
     $effectiveResetCount = Get-EffectiveResetCount
     $nextReset = Get-NextReset
     $nextLimit = Get-NextLimit
     $codexRunning = Test-CodexRunning
-    $claudeCodeRunning = if ($IncludeClaudeProcesses) { Test-ClaudeCodeRunning } else { $null }
     # Nothing shows whether a keeper runs; the keeper logic asks for itself when the keeper is on.
     $claudeKeeperRunning = $null
     $level = "none"
@@ -4192,7 +4248,6 @@ function Get-StatusSnapshot {
         NextReset = $nextReset
         NextLimit = $nextLimit
         CodexRunning = $codexRunning
-        ClaudeCodeRunning = $claudeCodeRunning
         ClaudeKeeperRunning = $claudeKeeperRunning
         ClaudeKeeperEnabled = [bool]$script:State.settings.keepClaudeCodeAlive
         Level = $level
@@ -4577,15 +4632,30 @@ function New-ClaudeSignInStartInfo {
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = $FilePath
     $info.Arguments = 'auth login --claudeai'
-    # Its own console window: Claude's sign-in opens the browser and may ask something there.
+    # Through the shell, so the CLI gets a console window of its own: UTP's own console is hidden, and
+    # Claude's sign-in opens the browser and may ask for a code there.
     $info.UseShellExecute = $true
     $info.WorkingDirectory = [IO.Path]::GetTempPath()
     return $info
 }
 
+function Start-UtpProcess {
+    # The real start of a prepared process; tests replace it.
+    param([System.Diagnostics.ProcessStartInfo]$Info)
+    return [System.Diagnostics.Process]::Start($Info)
+}
+
 function Start-ClaudeSignInProcess {
-    param([string]$FilePath)
-    return [System.Diagnostics.Process]::Start((New-ClaudeSignInStartInfo -FilePath $FilePath))
+    # ConfigDirectory: sign in for another account, into a folder of its own. A shell start passes UTP's
+    # environment on, so CLAUDE_CONFIG_DIR is set for this one start and restored right after. The CLI starts
+    # directly: no script wrapper or encoded command, which virus scanners flag.
+    param([string]$FilePath, [string]$ConfigDirectory = '')
+    $info = New-ClaudeSignInStartInfo -FilePath $FilePath
+    if (-not $ConfigDirectory) { return Start-UtpProcess -Info $info }
+    $previous = [Environment]::GetEnvironmentVariable('CLAUDE_CONFIG_DIR', 'Process')
+    [Environment]::SetEnvironmentVariable('CLAUDE_CONFIG_DIR', $ConfigDirectory, 'Process')
+    try { return Start-UtpProcess -Info $info }
+    finally { [Environment]::SetEnvironmentVariable('CLAUDE_CONFIG_DIR', $previous, 'Process') }
 }
 
 function Start-ClaudeSignIn {
@@ -4593,8 +4663,21 @@ function Start-ClaudeSignIn {
     if ($null -ne $script:ClaudeSignInProcess) { return $true }
     $cli = Resolve-UtpClaudeUsageCli
     if ([string]::IsNullOrEmpty($cli)) { Show-MainWindow; return $false }
-    try { $script:ClaudeSignInProcess = Start-ClaudeSignInProcess -FilePath $cli }
-    catch { Show-MainWindow; return $false }
+    # The CLI's own login, or for another account in Claude Desktop a fresh folder that becomes that account's login.
+    $login = Get-ClaudeUsageLogin
+    $directory = ''
+    if ($login.Missing -or $login.ConfigDirectory) {
+        $directory = Join-Path (Get-ClaudeAccountsDirectory) ('pending-' + [guid]::NewGuid().ToString('N'))
+        try { [void](New-Item -ItemType Directory -Path $directory -Force) } catch { Show-MainWindow; return $false }
+    }
+    try { $script:ClaudeSignInProcess = Start-ClaudeSignInProcess -FilePath $cli -ConfigDirectory $directory }
+    catch {
+        if ($directory) { Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue }
+        Show-MainWindow
+        return $false
+    }
+    $script:ClaudeSignInDirectory = $directory
+    $script:ClaudeSignInExpected = $(if ($directory) { [string]$login.Account } else { '' })
     return $true
 }
 
@@ -4605,6 +4688,19 @@ function Complete-ClaudeSignIn {
     try { if (-not $process.HasExited) { return } } catch { }
     $script:ClaudeSignInProcess = $null
     try { $process.Dispose() } catch { }
+    $directory = [string]$script:ClaudeSignInDirectory
+    $expected = [string]$script:ClaudeSignInExpected
+    $script:ClaudeSignInDirectory = ''
+    $script:ClaudeSignInExpected = ''
+    if ($directory) {
+        $account = Save-ClaudeAccountLogin -Directory $directory
+        if ($account -and $expected -and $account -ne $expected) {
+            # Kept for later, but Claude Desktop uses another account: say so right away.
+            Send-UtpNotification -Title 'Signed in to another Claude account' -Text 'Claude Desktop uses a different account. Click here to sign in with that one.' -Action 'claude-sign-in'
+            Start-ProviderUsageRefresh -Source claude
+            return
+        }
+    }
     # Judge by Claude's next answer, not the exit code: a window closed by hand after signing in still counts.
     $script:ClaudeSignInResultSince = Get-Date
     Start-ProviderUsageRefresh -Source claude
@@ -4633,6 +4729,10 @@ function Update-ClaudeSignInPrompt {
     if (-not (Test-ClaudeSignInNeeded)) { $script:ClaudeSignInPrompted = $false; return }
     if ($script:ClaudeSignInPrompted -or $null -ne $script:ClaudeSignInProcess -or $null -ne $script:ClaudeSignInResultSince) { return }
     $script:ClaudeSignInPrompted = $true
+    if ((Get-ProviderAttentionCode -Source 'claude') -eq 'account_sign_in_required') {
+        Send-UtpNotification -Title 'Sign in for your Claude Desktop account' -Text 'UTP has no sign-in yet for the account Claude Desktop uses. Click here to sign in to it once.' -Action 'claude-sign-in'
+        return
+    }
     Send-UtpNotification -Title 'Claude needs a new sign-in' -Text 'Click here to sign in. UTP checks your Claude usage again right after.' -Action 'claude-sign-in'
 }
 
@@ -5826,6 +5926,7 @@ function Get-ProviderAttentionText {
         'setup_required' { return 'Setup required' }
         'credential_unreadable' { return 'Saved key unreadable' }
         'access_denied' { return 'Access denied' }
+        'account_sign_in_required' { return 'Sign in for this account' }
         default { return 'Sign-in required' }
     }
 }
@@ -6367,12 +6468,23 @@ function Update-PillPreferencesPage {
     $pill.Preview.AccessibleName = 'Pill preview. ' + ($summary -join '. ')
 }
 
+function Select-MainWindowTab {
+    param([string]$Name)
+    if (-not $Name -or $null -eq $script:MainWindowControls -or $null -eq $script:MainWindowControls.Tabs) { return }
+    foreach ($page in $script:MainWindowControls.Tabs.TabPages) {
+        if ($page.Text -eq $Name) { $script:MainWindowControls.Tabs.SelectedTab = $page; return }
+    }
+}
+
 function Show-MainWindow {
+    # Tab: the tab to open at, such as "Pill"; the current one otherwise.
+    param([string]$Tab = '')
     if ($null -ne $script:MainForm -and -not $script:MainForm.IsDisposed) {
         $script:MainForm.WindowState = "Normal"
         $script:MainForm.ShowInTaskbar = $true
         $script:MainForm.Show()
         $script:MainForm.Activate()
+        Select-MainWindowTab -Name $Tab
         return
     }
 
@@ -7048,98 +7160,55 @@ function Show-MainWindow {
     if ($null -ne $script:RefreshMainWindow) { & $script:RefreshMainWindow }
     $form.Show()
     $form.Activate()
+    Select-MainWindowTab -Name $Tab
+}
+
+function New-TrayMenuItem {
+    param([string]$Text, [scriptblock]$OnClick = $null, [string]$Shortcut = '')
+    $item = New-Object System.Windows.Forms.ToolStripMenuItem
+    $item.Text = $Text
+    if ($Shortcut) { $item.ShortcutKeyDisplayString = $Shortcut }
+    if ($null -ne $OnClick) { $item.Add_Click($OnClick) }
+    return $item
+}
+
+function Find-TrayMenuItem {
+    # An item anywhere in the menu, submenus included.
+    param($Items, [string]$Text)
+    foreach ($item in @($Items)) {
+        if ($item.Text -eq $Text) { return $item }
+        if ($item -is [System.Windows.Forms.ToolStripMenuItem]) {
+            $found = Find-TrayMenuItem -Items $item.DropDownItems -Text $Text
+            if ($null -ne $found) { return $found }
+        }
+    }
+    return $null
 }
 
 function New-TrayMenu {
+    # What people use most stays on top; settings and rarely used tools sit in three submenus.
     $menu = New-Object System.Windows.Forms.ContextMenuStrip
 
-    $statusItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $statusItem.Enabled = $false
-    [void]$menu.Items.Add($statusItem)
-
+    $titleItem = New-Object System.Windows.Forms.ToolStripMenuItem
+    $titleItem.Text = "Usage Tray Pill $script:AppVersion"
+    $titleItem.Enabled = $false
+    [void]$menu.Items.Add($titleItem)
     [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
-    $quickItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $quickItem.Text = "Quick view"
-    $quickItem.ShortcutKeyDisplayString = "Right-click"
+    $quickItem = New-TrayMenuItem -Text "Quick view" -Shortcut "Right-click" -OnClick { Show-QuickPanel }
     $quickItem.Font = New-Object System.Drawing.Font $quickItem.Font, ([System.Drawing.FontStyle]::Bold)
-    $quickItem.Add_Click({ Show-QuickPanel })
     [void]$menu.Items.Add($quickItem)
-
-    $openItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $openItem.Text = "Open usage overview"
-    $openItem.Add_Click({ Show-MainWindow })
-    [void]$menu.Items.Add($openItem)
-
-    $updateItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $updateItem.Text = "Check for updates..."
-    $updateItem.Add_Click({ Invoke-UtpUpdateCheck -Interactive })
-    [void]$menu.Items.Add($updateItem)
-
-    $refreshItem = New-Object System.Windows.Forms.ToolStripMenuItem "Refresh now"
-    $refreshItem.Add_Click({ Start-AllUsageRefresh })
+    [void]$menu.Items.Add((New-TrayMenuItem -Text "Usage overview" -OnClick { Show-MainWindow }))
+    $refreshItem = New-TrayMenuItem -Text "Refresh now" -OnClick { Start-AllUsageRefresh }
     [void]$menu.Items.Add($refreshItem)
+    # Only while Claude needs it: the same sign-in as the notification.
+    $signInItem = New-TrayMenuItem -Text "Sign in to Claude..." -OnClick { [void](Start-ClaudeSignIn) }
+    $signInItem.Visible = $false
+    [void]$menu.Items.Add($signInItem)
+    [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
-    $addResetItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $addResetItem.Text = "Add reset"
-    $addResetItem.Add_Click({
-        $newItem = Show-ResetDialog $null
-        if ($null -ne $newItem) {
-            $script:State.resets = @($script:State.resets) + $newItem
-            Save-State
-            Refresh-Tray
-            if ($null -ne $script:MainForm -and -not $script:MainForm.IsDisposed -and $script:MainForm.Visible) {
-                $script:MainForm.Dispose()
-                $script:MainForm = $null
-                Show-MainWindow
-            }
-        }
-    })
-    [void]$menu.Items.Add($addResetItem)
-
-    $addLimitItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $addLimitItem.Text = "Add limit"
-    $addLimitItem.Add_Click({
-        $newItem = Show-LimitDialog $null
-        if ($null -ne $newItem) {
-            $script:State.limits = @($script:State.limits) + $newItem
-            Save-State
-            Refresh-Tray
-            if ($null -ne $script:MainForm -and -not $script:MainForm.IsDisposed -and $script:MainForm.Visible) {
-                $script:MainForm.Dispose()
-                $script:MainForm = $null
-                Show-MainWindow
-            }
-        }
-    })
-    [void]$menu.Items.Add($addLimitItem)
-
-    $settingsItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $settingsItem.Text = "Open Codex settings"
-    $settingsItem.Add_Click({ Start-Process "codex://settings" })
-    [void]$menu.Items.Add($settingsItem)
-
-    $openCodeGoItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $openCodeGoItem.Text = "Set up OpenCode Go"
-    $openCodeGoItem.Add_Click({ [void](Show-OpenCodeGoSetupDialog) })
-    [void]$menu.Items.Add($openCodeGoItem)
-
-    $qwenItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $qwenItem.Text = "Set up Qwen Token Plan"
-    $qwenItem.Add_Click({ [void](Show-QwenSetupDialog) })
-    [void]$menu.Items.Add($qwenItem)
-
-    $dataItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $dataItem.Text = "Open data folder"
-    $dataItem.Add_Click({
-        Ensure-DataDirectory
-        $explorerPath = Join-Path $env:SystemRoot "explorer.exe"
-        Start-Process -FilePath $explorerPath -ArgumentList $script:DataDir
-    })
-    [void]$menu.Items.Add($dataItem)
-
-    $badgeItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $badgeItem.Text = "Show status badge"
+    $pillMenu = New-TrayMenuItem -Text "Pill"
+    $badgeItem = New-TrayMenuItem -Text "Show the pill"
     $badgeItem.CheckOnClick = $true
     $badgeItem.Checked = [bool]$script:State.settings.showTaskbarBadge
     $badgeItem.Add_Click({
@@ -7153,20 +7222,59 @@ function New-TrayMenu {
             Hide-TaskbarBadge
         }
     })
-    [void]$menu.Items.Add($badgeItem)
-
-    $dualItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $dualItem.Text = "Show two providers"
+    [void]$pillMenu.DropDownItems.Add($badgeItem)
+    $dualItem = New-TrayMenuItem -Text "Show two providers"
     $dualItem.CheckOnClick = $true
     $dualItem.Checked = (Get-TaskbarBadgeLayout) -eq "dual"
     $dualItem.Add_Click({
         param($eventSource, $eventData)
         Set-TaskbarBadgePreference -Layout $(if ($eventSource.Checked) { "dual" } else { "single" })
     })
-    [void]$menu.Items.Add($dualItem)
+    [void]$pillMenu.DropDownItems.Add($dualItem)
+    [void]$pillMenu.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+    [void]$pillMenu.DropDownItems.Add((New-TrayMenuItem -Text "Pill settings..." -OnClick { Show-MainWindow -Tab "Pill" }))
+    [void]$pillMenu.DropDownItems.Add((New-TrayMenuItem -Text "Windows taskbar settings" -OnClick { Start-Process "ms-settings:taskbar" }))
+    [void]$menu.Items.Add($pillMenu)
 
-    $claudeKeeperItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $claudeKeeperItem.Text = "Keep Claude active"
+    $providersMenu = New-TrayMenuItem -Text "Providers"
+    [void]$providersMenu.DropDownItems.Add((New-TrayMenuItem -Text "Sign in to Claude..." -OnClick { [void](Start-ClaudeSignIn) }))
+    [void]$providersMenu.DropDownItems.Add((New-TrayMenuItem -Text "Open Codex settings" -OnClick { Start-Process "codex://settings" }))
+    [void]$providersMenu.DropDownItems.Add((New-TrayMenuItem -Text "Set up OpenCode Go..." -OnClick { [void](Show-OpenCodeGoSetupDialog) }))
+    [void]$providersMenu.DropDownItems.Add((New-TrayMenuItem -Text "Set up Qwen Token Plan..." -OnClick { [void](Show-QwenSetupDialog) }))
+    [void]$menu.Items.Add($providersMenu)
+
+    $moreMenu = New-TrayMenuItem -Text "More"
+    $addResetItem = New-TrayMenuItem -Text "Add reset..."
+    $addResetItem.Add_Click({
+        $newItem = Show-ResetDialog $null
+        if ($null -ne $newItem) {
+            $script:State.resets = @($script:State.resets) + $newItem
+            Save-State
+            Refresh-Tray
+            if ($null -ne $script:MainForm -and -not $script:MainForm.IsDisposed -and $script:MainForm.Visible) {
+                $script:MainForm.Dispose()
+                $script:MainForm = $null
+                Show-MainWindow
+            }
+        }
+    })
+    [void]$moreMenu.DropDownItems.Add($addResetItem)
+    $addLimitItem = New-TrayMenuItem -Text "Add limit..."
+    $addLimitItem.Add_Click({
+        $newItem = Show-LimitDialog $null
+        if ($null -ne $newItem) {
+            $script:State.limits = @($script:State.limits) + $newItem
+            Save-State
+            Refresh-Tray
+            if ($null -ne $script:MainForm -and -not $script:MainForm.IsDisposed -and $script:MainForm.Visible) {
+                $script:MainForm.Dispose()
+                $script:MainForm = $null
+                Show-MainWindow
+            }
+        }
+    })
+    [void]$moreMenu.DropDownItems.Add($addLimitItem)
+    $claudeKeeperItem = New-TrayMenuItem -Text "Keep Claude active"
     $claudeKeeperItem.CheckOnClick = $true
     $claudeKeeperItem.Checked = [bool]$script:State.settings.keepClaudeCodeAlive
     $claudeKeeperItem.Add_Click({
@@ -7179,44 +7287,33 @@ function New-TrayMenu {
         Ensure-ClaudeUsageKeeper
         Refresh-Tray
     })
-    [void]$menu.Items.Add($claudeKeeperItem)
-
-    $taskbarSettingsItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $taskbarSettingsItem.Text = "Taskbar settings"
-    $taskbarSettingsItem.Add_Click({
-        Start-Process "ms-settings:taskbar"
+    [void]$moreMenu.DropDownItems.Add($claudeKeeperItem)
+    $dataItem = New-TrayMenuItem -Text "Open data folder"
+    $dataItem.Add_Click({
+        Ensure-DataDirectory
+        $explorerPath = Join-Path $env:SystemRoot "explorer.exe"
+        Start-Process -FilePath $explorerPath -ArgumentList $script:DataDir
     })
-    [void]$menu.Items.Add($taskbarSettingsItem)
+    [void]$moreMenu.DropDownItems.Add($dataItem)
+    [void]$menu.Items.Add($moreMenu)
 
     [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+    [void]$menu.Items.Add((New-TrayMenuItem -Text "Check for updates..." -OnClick { Invoke-UtpUpdateCheck -Interactive }))
+    [void]$menu.Items.Add((New-TrayMenuItem -Text "Exit" -OnClick { Exit-TrayApp }))
 
-    $exitItem = New-Object System.Windows.Forms.ToolStripMenuItem
-    $exitItem.Text = "Exit"
-    $exitItem.Add_Click({ Exit-TrayApp })
-    [void]$menu.Items.Add($exitItem)
-
-    $menu.Tag = @{Badge=$badgeItem;Dual=$dualItem;Keeper=$claudeKeeperItem;Status=$statusItem;Refresh=$refreshItem}
-    $menuOpeningAction = {
+    $menu.Tag = @{Badge=$badgeItem;Dual=$dualItem;Keeper=$claudeKeeperItem;Refresh=$refreshItem;SignIn=$signInItem}
+    $menu.Add_Opening({
         param($eventSource, $eventData)
-        $eventSource.Tag.Dual.Checked = (Get-TaskbarBadgeLayout) -eq "dual"
-        $badgeItem = $eventSource.Tag.Badge
-        $claudeKeeperItem = $eventSource.Tag.Keeper
-        $statusItem = $eventSource.Tag.Status
-        $refreshItem = $eventSource.Tag.Refresh
+        # Only settings and cached state: opening the menu never searches processes or asks a provider.
+        $items = $eventSource.Tag
         $script:TrayMenuOpen = $true
-        $refreshItem.Enabled = $script:ProviderRefreshes.Count -eq 0
-        $refreshItem.Text = $(if ($refreshItem.Enabled) { "Refresh now" } else { "Refreshing..." })
-        $snapshot = Get-StatusSnapshot -IncludeClaudeProcesses
-        $badgeItem.Checked = [bool]$script:State.settings.showTaskbarBadge
-        $claudeKeeperItem.Checked = [bool]$script:State.settings.keepClaudeCodeAlive
-        $nextText = "no active reset"
-        if ($null -ne $snapshot.NextReset) {
-            $nextText = "next reset expires in $(Format-TimeLeft $snapshot.NextReset.Reset.expiresAt)"
-        }
-        $claudeText = if ($snapshot.ClaudeCodeRunning) { "Claude: active" } elseif ($snapshot.ClaudeKeeperEnabled) { "Claude: keeper waiting" } else { "Claude: off" }
-        $statusItem.Text = "Codex: $(if ($snapshot.CodexRunning) { "active" } else { "inactive" }) | $claudeText | resets: $($snapshot.ActiveResetCount) | $nextText"
-    }
-    $menu.Add_Opening($menuOpeningAction)
+        $items.Dual.Checked = (Get-TaskbarBadgeLayout) -eq "dual"
+        $items.Badge.Checked = [bool]$script:State.settings.showTaskbarBadge
+        $items.Keeper.Checked = [bool]$script:State.settings.keepClaudeCodeAlive
+        $items.Refresh.Enabled = $script:ProviderRefreshes.Count -eq 0
+        $items.Refresh.Text = $(if ($items.Refresh.Enabled) { "Refresh now" } else { "Refreshing..." })
+        $items.SignIn.Visible = [bool](Test-ClaudeSignInNeeded)
+    })
     $menu.Add_Closed({
         $script:TrayMenuOpen = $false
         Refresh-Tray

@@ -68,38 +68,69 @@ try {
     Write-CliAccount $cliAccount
     Check ((Get-ClaudeCliAccountUuid) -eq $cliAccount) 'The CLI account must be readable without parsing the whole settings file'
 
-    # Another account in Claude Desktop: the pill follows Desktop, with percentages and no reset times.
-    Write-CliUsage
-    $usage = Get-ClaudeUsageSnapshot
-    Check ($usage.source -eq 'claude-desktop-plan-history' -and $usage.fiveHourRemainingPercent -eq 60 -and $usage.sevenDayRemainingPercent -eq 82) 'A Desktop account other than the CLI account must decide what the pill shows'
-    Check ((Get-ProviderStatusMessage -Source 'claude') -like 'Claude - Via Claude Desktop, *') 'The overview must say the numbers come from Claude Desktop'
-    Test-QuickViewStatusFits
-    $pill = Get-TaskbarBadgeData -Source 'claude'
-    Check ((@($pill.Items | ForEach-Object { "$($_.Label) $($_.Text)" }) -join ',') -eq '5h 60%,weekly 82%' -and @($pill.Items | Where-Object { $_.ResetsAt }).Count -eq 0) 'The pill must show the Desktop account without invented reset times'
-
-    # The same account in both: the CLI answer stays, because it carries reset times.
-    Reset-ClaudeCaches
-    Write-CliAccount $desktopAccount
-    $usage = Get-ClaudeUsageSnapshot
-    Check ($usage.source -eq 'claude-code-control' -and $usage.fiveHourRemainingPercent -eq 61 -and $usage.fiveHourResetsAt) 'With one account the CLI answer and its reset times must stay'
-    Write-CliUsage -ErrorCode 'auth_required'
-    Check ((Get-ClaudeUsageSnapshot).fiveHourRemainingPercent -eq 60) 'Without a CLI answer, Claude Desktop must fill in'
-
-    # Desktop samples about every 15 minutes: an 18-minute-old sample is still current, a 40-minute-old one is not.
-    Reset-ClaudeCaches
-    Write-CliUsage
-    Write-CliAccount $cliAccount
-    Write-DesktopData $current @(New-Sample 18 25 30) $desktopAccount
-    Check ((Get-ClaudeUsageSnapshot).fiveHourRemainingPercent -eq 75) 'A sample from the last Desktop interval must not blink to unknown'
-    Reset-ClaudeCaches
-    Write-DesktopData $current @(New-Sample 40 25 30) $desktopAccount
-    $usage = Get-ClaudeUsageSnapshot
-    Check ($usage.source -eq 'claude-code-control' -and $usage.fiveHourRemainingPercent -eq 61) 'When Claude Desktop stopped recording, the CLI answer must stay'
-
-    # An account switch in Desktop: old samples belong to the old account, so wait for the first new one.
+    # The CLI source answers for the account Claude Desktop uses, through a login of its own for another account.
+    $script:Asked = New-Object System.Collections.ArrayList
+    $script:Answer = 'own'
+    function Get-UtpClaudeControlUsage {
+        param([string]$ConfigDirectory = '')
+        [void]$script:Asked.Add($ConfigDirectory)
+        $now = [DateTimeOffset]::Now
+        if ($script:Answer -eq 'timeout') { return New-UtpExternalUsageFailure 'claude-code-control' 'timeout' 'Synthetic timeout' }
+        $values = if ($ConfigDirectory) { @(33, 44) } else { @(61, 70) }
+        return [pscustomobject]@{ source = 'claude-code-control'; available = $true; lastCheckedAt = $now.ToString('o'); lastSuccessAt = $now.ToString('o'); lastError = ''; errorCode = ''; items = @(
+            [pscustomobject]@{ key = 'five_hour'; label = '5h'; remainingPercent = $values[0]; resetsAt = $now.AddMinutes(90).ToString('o') },
+            [pscustomobject]@{ key = 'seven_day'; label = 'weekly'; remainingPercent = $values[1]; resetsAt = $now.AddDays(3).ToString('o') }) }
+    }
     Reset-ClaudeCaches
     Write-DesktopData $current @(New-Sample 5 40 18) $desktopAccount
-    Check ((Get-ClaudeUsageSnapshot).fiveHourRemainingPercent -eq 60) 'Before the switch the Desktop account must show'
+    $login = Get-ClaudeUsageLogin
+    Check ($login.Account -eq $desktopAccount -and $login.Missing -and -not $login.ConfigDirectory) 'Another account in Claude Desktop needs a login of its own'
+    $revisionWithout = Get-UtpCredentialRevision 'claude'
+    [void](Update-ClaudeControlUsage)
+    $usage = Get-ClaudeUsageSnapshot
+    Check ($script:Asked.Count -eq 0 -and $usage.errorCode -eq 'account_sign_in_required' -and $null -eq $usage.fiveHourRemainingPercent) 'Without that login UTP must ask for a sign-in, never show the CLI account'
+    Check ((Get-ProviderAttentionCode -Source 'claude') -eq 'account_sign_in_required' -and (Get-ProviderAttentionText -Source 'claude' -Code 'account_sign_in_required') -eq 'Sign in for this account') 'The pill and quick view must ask to sign in for this account'
+    Check ((Get-ProviderRetrySeconds 'account_sign_in_required' 1) -lt 0) 'A missing login must pause instead of retrying'
+
+    # Once UTP keeps a login for it, Claude answers for that account through it, with reset times.
+    $accountLogin = Join-Path (Get-ClaudeAccountsDirectory) $desktopAccount
+    [void](New-Item -ItemType Directory -Path $accountLogin -Force)
+    ('{"oauthAccount":{"accountUuid":"' + $desktopAccount + '"}}') | Set-Content -LiteralPath (Join-Path $accountLogin '.claude.json') -Encoding UTF8
+    $login = Get-ClaudeUsageLogin
+    Check ($login.ConfigDirectory -eq $accountLogin -and -not $login.Missing) 'A kept login must answer for its account'
+    Check ((Get-UtpCredentialRevision 'claude') -ne $revisionWithout) 'A new login must make the collector ask again at once'
+    [void](Update-ClaudeControlUsage)
+    $usage = Get-ClaudeUsageSnapshot
+    Check ($script:Asked[-1] -eq $accountLogin -and $usage.fiveHourRemainingPercent -eq 33 -and $usage.fiveHourResetsAt) 'The account in Claude Desktop must show, with reset times'
+
+    # Back to the CLI's own account: until the collector answers, nothing of the other account shows.
+    $revisionDesktop = Get-UtpCredentialRevision 'claude'
+    Write-DesktopData $current @(New-Sample 5 40 18) $cliAccount
+    Check ((Get-UtpCredentialRevision 'claude') -ne $revisionDesktop) 'A switch in Claude Desktop must make the collector ask again at once'
+    $usage = Get-ClaudeUsageSnapshot
+    Check ([bool]$usage.pending -and $null -eq $usage.fiveHourRemainingPercent -and (Get-ProviderStatusMessage -Source 'claude') -eq 'Claude - Switching accounts' -and (Get-TaskbarBadgeData -Source 'claude').StatusText -eq 'Switching accounts') 'A switch must not show the previous account'
+    Test-QuickViewStatusFits
+    $script:Answer = 'timeout'
+    [void](Update-ClaudeControlUsage)
+    Check ($null -eq (Get-ClaudeUsageSnapshot).fiveHourRemainingPercent) 'Cached values of another account must never fill in'
+    $script:Answer = 'own'
+    [void](Update-ClaudeControlUsage)
+    Check ($script:Asked[-1] -eq '' -and (Get-ClaudeUsageSnapshot).fiveHourRemainingPercent -eq 61) 'The CLI''s own account must answer through its own login'
+    Write-CliUsage
+    Check ((Get-ClaudeUsageSnapshot).fiveHourRemainingPercent -eq 61) 'A cache from before accounts were tracked must still show'
+
+    # Claude Desktop's own history still fills in for the statusline source: freshness and account switches.
+    $script:State.settings.claudeControlEnabled = $false
+    Reset-ClaudeCaches
+    Write-DesktopData $current @(New-Sample 18 25 30) $desktopAccount
+    Check ((Get-ClaudeUsageSnapshot).fiveHourRemainingPercent -eq 75) 'A recent Claude Desktop sample must not blink to unknown'
+    Reset-ClaudeCaches
+    Write-DesktopData $current @(New-Sample 40 25 30) $desktopAccount
+    Check ($null -eq (Get-ClaudeDesktopUsageSnapshot)) 'An old Claude Desktop sample must not show'
+    Reset-ClaudeCaches
+    Write-DesktopData $current @(New-Sample 5 40 18) $desktopAccount
+    $usage = Get-ClaudeUsageSnapshot
+    Check ($usage.source -eq 'claude-desktop-plan-history' -and $usage.fiveHourRemainingPercent -eq 60) 'Without statusline data the current Desktop folder must be used'
     $thirdAccount = '33333333-3333-4333-8333-333333333333'
     Write-DesktopData $current @(New-Sample 5 40 18) $thirdAccount
     $usage = Get-ClaudeUsageSnapshot
@@ -108,17 +139,7 @@ try {
     Test-QuickViewStatusFits
     Write-DesktopData $current @((New-Sample 5 40 18), (New-Sample -1 12 9)) $thirdAccount
     Check ((Get-ClaudeUsageSnapshot).fiveHourRemainingPercent -eq 88) 'The first sample of the new account must show'
-    Write-DesktopData $current @((New-Sample 5 40 18), (New-Sample -1 12 9)) $cliAccount
-    $usage = Get-ClaudeUsageSnapshot
-    Check ($usage.source -eq 'claude-code-control' -and $usage.fiveHourRemainingPercent -eq 61) 'Switching back to the CLI account must use the CLI answer right away'
-
-    # The statusline source keeps its Desktop fallback, now in the current folder.
-    Reset-ClaudeCaches
-    $script:State.settings.claudeControlEnabled = $false
-    Write-DesktopData $current @(New-Sample 5 40 18) $desktopAccount
-    $usage = Get-ClaudeUsageSnapshot
-    Check ($usage.source -eq 'claude-desktop-plan-history' -and $usage.fiveHourRemainingPercent -eq 60) 'Without statusline data the current Desktop folder must be used'
-    Write-Output 'Claude Desktop account tests OK (discovery, account match, freshness, switch, statusline fallback)'
+    Write-Output 'Claude Desktop account tests OK (discovery, logins per account, switch, no cross-account cache, statusline fallback)'
 }
 finally {
     foreach ($name in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process') }
