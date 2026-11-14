@@ -83,6 +83,17 @@ try {
         try{$contained=Read-UtpCollectorSchedule -Path $scheduleTest -CredentialRevision 'same' -Snapshot $hardPause}catch{}
         Check ($null -ne $contained -and $contained.Next -gt (Get-Date)) 'Corrupt schedule must stay paused per source without terminating the collector'
     }
+    # Older versions paused for good when OpenCode Go reported no subscription, also while it was only renewing.
+    @{nextAttemptAt=[datetime]::MaxValue.ToString('o');failures=1;credentialRevision='same'}|ConvertTo-Json|Set-Content $scheduleTest
+    $renewal=[pscustomobject]@{lastError='subscription_required';lastCheckedAt=(Get-Date).AddDays(-2).ToString('o');credentialRevision='same'}
+    Check ((Read-UtpCollectorSchedule -Path $scheduleTest -CredentialRevision 'same' -Snapshot $renewal).Next -le (Get-Date)) 'A saved pause for a missing subscription must resume after the update'
+    $justChecked=[pscustomobject]@{lastError='subscription_required';lastCheckedAt=(Get-Date).ToString('o');credentialRevision='same'}
+    $waiting=Read-UtpCollectorSchedule -Path $scheduleTest -CredentialRevision 'same' -Snapshot $justChecked
+    Check ($waiting.Next -gt (Get-Date).AddMinutes(4) -and $waiting.Next -lt (Get-Date).AddMinutes(6)) 'A missing subscription must be checked again after about five minutes'
+    $rejected=[pscustomobject]@{lastError='auth_expired';lastCheckedAt=(Get-Date).AddDays(-2).ToString('o');credentialRevision='same'}
+    Check ((Read-UtpCollectorSchedule -Path $scheduleTest -CredentialRevision 'same' -Snapshot $rejected).Next -eq [datetime]::MaxValue) 'A saved pause for a rejected key must stay paused'
+    Set-Content $scheduleTest '{'
+    Check ((Read-UtpCollectorSchedule -Path $scheduleTest -CredentialRevision 'same' -Snapshot $renewal).Next -eq [datetime]::MaxValue) 'An unreadable schedule must stay paused, also for a missing subscription'
 
     # Actual collector and policy, isolated from all installed providers.
     $fixture=Join-Path $root 'collector';[void](New-Item -ItemType Directory $fixture)
