@@ -1595,14 +1595,21 @@ function Get-ClaudeAccountsDirectory {
 }
 
 function Get-ClaudeUsageLogin {
-    # Which Claude CLI login answers for the account Claude Desktop uses. Without Claude Desktop, or when it uses
-    # the CLI's own account, that is the CLI's own login; another account needs a login of its own, kept by UTP.
+    # Which Claude CLI login answers for the account Claude Desktop uses: the login UTP keeps for that account,
+    # whenever there is one. Claude Desktop's own sessions write their account into the CLI's shared .claude.json,
+    # so once UTP keeps logins for several accounts, that file no longer says whose credentials the CLI's own
+    # login holds. Only without kept logins does a matching .claude.json still mean the CLI's own login fits.
     $own = Get-ClaudeLoginAccountUuid
     $desktop = Get-ClaudeDesktopAccountUuid
-    if (-not $desktop -or $desktop -eq $own) { return [pscustomobject]@{ Account = $own; ConfigDirectory = ''; Missing = $false } }
-    $directory = Join-Path (Get-ClaudeAccountsDirectory) $desktop
-    $known = (Get-ClaudeLoginAccountUuid -ConfigDirectory $directory) -eq $desktop
-    return [pscustomobject]@{ Account = $desktop; ConfigDirectory = $(if ($known) { $directory } else { '' }); Missing = -not $known }
+    if (-not $desktop) { return [pscustomobject]@{ Account = $own; ConfigDirectory = ''; Missing = $false } }
+    $accounts = Get-ClaudeAccountsDirectory
+    $directory = Join-Path $accounts $desktop
+    if ((Get-ClaudeLoginAccountUuid -ConfigDirectory $directory) -eq $desktop) { return [pscustomobject]@{ Account = $desktop; ConfigDirectory = $directory; Missing = $false } }
+    $kept = @(foreach ($folder in @(try { [IO.Directory]::GetDirectories($accounts) } catch { })) {
+        if ([IO.Path]::GetFileName($folder) -match '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$') { $folder }
+    })
+    if ($desktop -eq $own -and $kept.Count -eq 0) { return [pscustomobject]@{ Account = $own; ConfigDirectory = ''; Missing = $false } }
+    return [pscustomobject]@{ Account = $desktop; ConfigDirectory = ''; Missing = $true }
 }
 
 function Save-ClaudeAccountLogin {

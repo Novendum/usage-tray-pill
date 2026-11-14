@@ -14,7 +14,7 @@ When OpenCode Go is explicitly configured, version 2 of `opencode-go-credentials
 
 When Qwen Token Plan is explicitly configured, `qwen-token-plan-credentials.json` contains the user-supplied QwenCloud Cookie request-header value encrypted with Windows DPAPI for the current Windows user. The plaintext header is not written to disk by UTP.
 
-With the optional Claude CLI source, `claude-accounts\<account>` holds a Claude CLI sign-in for each other Claude Desktop account you signed in to through UTP. The Claude CLI writes these folders itself, its credentials included, with the same per-user protection as its sign-in in your user profile. UTP reads only the account identifier in each folder's `.claude.json` and the write time of its credential file; it moves a folder into place when a sign-in finishes and removes one only when a newer sign-in for the same account replaces it, or when a sign-in was cancelled. Delete a folder to forget that account.
+With the optional Claude CLI source, `claude-accounts\<account>` holds a Claude CLI sign-in for each Claude Desktop account you signed in to through UTP. The Claude CLI writes these folders itself, its credentials included, with the same per-user protection as its sign-in in your user profile. UTP reads only the folder names, the account identifier in each folder's `.claude.json` and the write time of its credential file; it moves a folder into place when a sign-in finishes and removes one only when a newer sign-in for the same account replaces it, or when a sign-in was cancelled. Delete a folder to forget that account.
 
 Disabling OpenCode Go or Qwen preserves its credential and cache. Disabled Qwen collection sends no quota requests.
 
