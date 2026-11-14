@@ -4,6 +4,12 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [Unreleased]
+
+### Fixed
+
+- **Claude no longer shows another account's usage after a switch.** With **Use Claude CLI quotas** on, Claude Desktop's own sessions write their account into the Claude CLI's shared settings. UTP took that as proof that the CLI's own sign-in belonged to the account Claude Desktop uses, so it could show the usage of the account the CLI is really signed in to, even when it kept a sign-in for the right account. UTP now always uses the sign-in it keeps for the account in Claude Desktop. The CLI's own sign-in answers only while UTP keeps no sign-ins and the CLI's settings name the same account; otherwise UTP asks you once to sign in for that account.
+
 ## [0.1.0-rc.15] - 2026-11-07
 
 ### Changed

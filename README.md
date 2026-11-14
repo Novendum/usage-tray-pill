@@ -78,6 +78,8 @@ No administrator rights are required. Keep `src/`, `scripts/` and `assets/` besi
 
 Follow the [provider setup guide](docs/PROVIDERS.md) for connection steps, migration notes and known limitations. A provider's absence does not require installing it just to try UTP.
 
+**Several Claude accounts?** With **Use Claude CLI quotas** on, the Claude side follows the account Claude Desktop uses, through a Claude CLI sign-in that UTP keeps per account. UTP compares account identifiers only, never credentials. Claude Desktop writes its account into the Claude CLI's shared settings, so once UTP keeps one sign-in, every account you use in Claude Desktop needs its own, the CLI's own account included. UTP asks once per account with **Sign in for this account** and never shows another account's usage instead. See [Claude setup](docs/PROVIDERS.md#claude).
+
 <details>
 <summary><strong>Optional shortcuts and startup</strong></summary>
 
