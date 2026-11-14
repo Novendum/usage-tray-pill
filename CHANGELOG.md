@@ -4,7 +4,7 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
-## [Unreleased]
+## [0.1.0-rc.17] - 2026-11-14
 
 ### Fixed
 

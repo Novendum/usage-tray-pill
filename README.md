@@ -30,9 +30,9 @@ A small Windows utility for checking remaining **Codex, Claude, Antigravity, Ope
 - **A new icon and clear status.** UTP gets its own icon and taskbar group, and a red dot on any provider that needs a new key or sign-in.
 - **More countdowns.** Weekly and monthly limits can count down in days, next to the 5-hour clock.
 
-Coming from rc.7? It all arrives at once. From rc.8, **Check for updates** brings you the newest version in one click. rc.10 finds Claude Code in its new Claude Desktop folder, rc.11 shows the ChatGPT 5-hour limit for plans that have one, rc.12 lets you choose which limits the pill shows, rc.13 follows the account you use in Claude Desktop, rc.14 lets you sign in to Claude from a notification, rc.15 keeps a Claude sign-in per account and tidies the menu, and rc.16 makes sure the pill never shows another Claude account's usage after a switch.
+Coming from rc.7? It all arrives at once. From rc.8, **Check for updates** brings you the newest version in one click. rc.10 finds Claude Code in its new Claude Desktop folder, rc.11 shows the ChatGPT 5-hour limit for plans that have one, rc.12 lets you choose which limits the pill shows, rc.13 follows the account you use in Claude Desktop, rc.14 lets you sign in to Claude from a notification, rc.15 keeps a Claude sign-in per account and tidies the menu, rc.16 makes sure the pill never shows another Claude account's usage after a switch, and rc.17 brings OpenCode Go back by itself after a subscription renewal.
 
-[Download v0.1.0-rc.16](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.16) · [Read the changes](CHANGELOG.md#010-rc16---2026-11-14)
+[Download v0.1.0-rc.17](https://github.com/Novendum/usage-tray-pill/releases/tag/v0.1.0-rc.17) · [Read the changes](CHANGELOG.md#010-rc17---2026-11-14)
 
 ## At home in your taskbar
 
