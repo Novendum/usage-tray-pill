@@ -42,7 +42,7 @@ UTP stores the supplied key with current-user Windows DPAPI in its version-2 cre
 https://opencode.ai/zen/go/v1/usage
 ```
 
-The API supplies 5-hour, weekly, and monthly percentages, statuses, and reset times. UTP normally refreshes every 60 seconds. Temporary errors may retain a clearly cached result for at most six hours. Rejected keys and missing subscriptions pause automatic requests and clear displayed values. The previous version-1 cookie file is preserved without decrypting or using it and requires a new API key; **Disable** preserves saved credentials and cache.
+The API supplies 5-hour, weekly, and monthly percentages, statuses, and reset times. UTP normally refreshes every 60 seconds. Temporary errors may retain a clearly cached result for at most six hours. Rejected keys pause automatic requests and clear displayed values. A missing subscription clears them too, but UTP checks again after five minutes and then at most once an hour: OpenCode can briefly report no subscription while it renews one, and the values then return by themselves. The previous version-1 cookie file is preserved without decrypting or using it and requires a new API key; **Disable** preserves saved credentials and cache.
 
 For managed setups, `OPENCODE_GO_API_KEY` takes precedence over UTP's saved key. If that variable holds an old key, open **Set up OpenCode Go**: it shows which key UTP uses and can switch to the key saved in UTP, and saving a new key there switches to it. An expired key shows as **API key expired**; create a new key in the OpenCode console and save it in UTP. Legacy workspace/cookie environment variables are no longer used.
 

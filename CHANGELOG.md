@@ -4,6 +4,12 @@ All notable changes to Usage Tray Pill will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project intends to use [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first public release.
 
+## [0.1.0-rc.17] - 2026-11-14
+
+### Fixed
+
+- **OpenCode Go comes back by itself after a subscription renewal.** While renewing a Go subscription, OpenCode briefly answered that the API key had no subscription. UTP then stopped asking until you chose **Refresh now**, so the pill kept showing `--` with a red dot. UTP now checks again after five minutes and then at most once an hour. A pause saved by an earlier version resumes after the update.
+
 ## [0.1.0-rc.16] - 2026-11-14
 
 ### Fixed

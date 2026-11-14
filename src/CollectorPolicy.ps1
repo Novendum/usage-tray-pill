@@ -1,7 +1,10 @@
 function Get-ProviderRetrySeconds {
     param([string]$ErrorCode,[int]$FailureCount,[int]$RetryAfterSeconds=0)
-    if ($ErrorCode -in @('auth_expired','auth_required','unsupported_auth_context','account_sign_in_required','unsupported_response','unexpected_model_activity','unexpected_transcript_activity','access_denied','subscription_required','api_key_required','credential_unreadable','setup_required')) { return -1 }
+    if ($ErrorCode -in @('auth_expired','auth_required','unsupported_auth_context','account_sign_in_required','unsupported_response','unexpected_model_activity','unexpected_transcript_activity','access_denied','api_key_required','credential_unreadable','setup_required')) { return -1 }
     if ($RetryAfterSeconds -gt 0) { return [Math]::Min(86400,[Math]::Max(30,$RetryAfterSeconds)) }
+    # A subscription can come back by itself: OpenCode Go briefly reported none while renewing one. Check again
+    # after five minutes, then at most hourly, instead of pausing until a manual refresh.
+    if ($ErrorCode -eq 'subscription_required') { return [int][Math]::Min(3600,300*[Math]::Pow(2,[Math]::Min(4,[Math]::Max(0,$FailureCount-1)))) }
     if ($ErrorCode -eq 'quota_fetch_unavailable') { return [int][Math]::Min(900,[Math]::Max(300,30*[Math]::Pow(2,[Math]::Min(5,[Math]::Max(0,$FailureCount-1))))) }
     return [int][Math]::Min(900,30*[Math]::Pow(2,[Math]::Min(5,[Math]::Max(0,$FailureCount-1))))
 }
@@ -48,7 +51,7 @@ function Get-UtpCredentialRevision {
 
 function Read-UtpCollectorSchedule {
     param([string]$Path,[string]$CredentialRevision,[object]$Snapshot)
-    $next=[datetime]::MinValue;$failures=0
+    $next=[datetime]::MinValue;$failures=0;$savedPause=$false
     if(Test-Path -LiteralPath $Path){
         try {
             $saved=Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json -ErrorAction Stop
@@ -57,6 +60,7 @@ function Read-UtpCollectorSchedule {
             if([string]$saved.credentialRevision -eq $CredentialRevision){
                 $next=$savedNext
                 $failures=[Math]::Max(0,[int]$saved.failures)
+                $savedPause=($savedNext -eq [datetime]::MaxValue)
             }
         } catch {
             # An unreadable source schedule must not restart every provider or bypass a pause.
@@ -73,6 +77,8 @@ function Read-UtpCollectorSchedule {
             $seconds=Get-ProviderRetrySeconds $code $failures ([int]$Snapshot.retryAfterSeconds)
             $checked=Get-DateOrNull ([string]$Snapshot.lastCheckedAt)
             if($seconds -lt 0){$next=[datetime]::MaxValue}
+            # Older versions paused for good on a missing subscription; such a saved pause now counts from the last check.
+            elseif($savedPause -and $code -eq 'subscription_required'){$next=if($null -ne $checked){$checked.AddSeconds($seconds)}else{[datetime]::MinValue}}
             elseif($null -ne $checked -and $checked.AddSeconds($seconds) -gt $next){$next=$checked.AddSeconds($seconds)}
         }
     }

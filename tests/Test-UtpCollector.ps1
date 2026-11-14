@@ -11,6 +11,9 @@ Check ((Get-ProviderRetrySeconds auth_required 10) -eq -1) 'CLI sign-in requirem
 Check ((Get-ProviderRetrySeconds unexpected_model_activity 1) -eq -1) 'Unexpected model activity must never be retried automatically'
 Check ((Get-ProviderRetrySeconds rate_limited 1 240) -eq 240) 'Honor provider Retry-After'
 Check ((Get-ProviderRetrySeconds network_error 5) -gt (Get-ProviderRetrySeconds network_error 1)) 'Network failures must back off'
+# A renewing subscription can briefly be reported as missing: check again after five minutes, then at most hourly.
+Check ((Get-ProviderRetrySeconds subscription_required 1) -eq 300 -and (Get-ProviderRetrySeconds subscription_required 2) -eq 600 -and (Get-ProviderRetrySeconds subscription_required 20) -eq 3600) 'A missing subscription must be checked again after five minutes, then at most hourly'
+Check ((Get-ProviderRetrySeconds api_key_required 1) -eq -1 -and (Get-ProviderRetrySeconds access_denied 1) -eq -1) 'Missing keys and denied access must still pause polling'
 $resetTime=(Get-Date).AddSeconds(20)
 Check ((Get-NextQuotaReset ([pscustomobject]@{items=@([pscustomobject]@{resetsAt=$resetTime.ToString('o')})})) -eq $resetTime) 'Schedule an early refresh at the actual quota reset'
 Add-Type @'
